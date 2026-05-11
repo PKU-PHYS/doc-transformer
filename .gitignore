@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+.pixi/
+pixi.lock
+checkpoints/
+*.pt
+*.pth
+.pytest_cache/
