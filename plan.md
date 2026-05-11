@@ -189,7 +189,10 @@ $$\mathbf{v} = \mathbf{W}_\text{num} \cdot \text{Fourier}(x), \quad \mathbf{W}_\
 ├── README.md                      # 子项目说明与运行指南
 ├── config.py                      # 全局超参数与配置 (ModelConfig, TrainConfig)
 ├── data/
-│   └── synthetic.py               # 合成数据生成器与 Collate 函数
+│   ├── synthetic.py               # 顶层合成数据集与 Collate 函数
+│   ├── functions/                 # 数学函数注册表 (unary, binary, multivar...)
+│   ├── templates/                 # 结构模板引擎 (100+种JSON模板) 与 干扰字段生成器
+│   └── text_tasks/                # 纯文本推理任务生成器
 ├── model/
 │   ├── __init__.py
 │   ├── json_parser.py             # JSON 递归解析算法 -> List[LeafNode]
@@ -253,6 +256,17 @@ class TrainConfig:
     device: str = "cuda"
 ```
 
+### 5.1 模型长度限制与截断策略说明
+
+Document Transformer 中定义的 `max_tokens` (如 512) 是单条数据在被展平处理为叶子节点序列后的长度上限。需要特别注意：
+1. **Token 的本质**：在这里，一个 token 代表 JSON 树中的一个叶子节点（例如一个数值或一个字符串），而非 NLP 传统意义上的一个子词。
+2. **超长截断（Truncation）与致命隐患**：目前代码中采用了简单的顺序截断（超过 `max_tokens` 的尾部节点直接丢弃）。但这会带来一个**致命问题**：如果被截掉的尾部包含了逻辑推导的核心参数，而程序又恰好在剩下的节点里 MASK 了目标，这就会变成**无解任务（Unsolvable Task）**。
+3. **智能截断策略（Smart Truncation，概念阶段）**：由于不能简单使用 NLP 的定长滑动窗口，我们在未来应该采用**基于树结构与 Mask 关联度的筛选机制**。
+   - **先锁定目标**：在未经截断的完整树中，先选定要 Mask 的核心节点。
+   - **计算亲缘度**：计算所有节点与该 Mask 节点的结构距离（如：共享多长的 `path` 前缀、是否属于同一个 `group_id` 的同级元素）。同组元素、兄弟节点保留优先级最高；不相干的分支（如扰动字段 `author`, `timestamp` 等）保留优先级最低。
+   - **按优先级丢弃**：优先从低优先级的无关节点开始剔除，直到总节点数降至 `max_tokens`。
+4. **显存与计算复杂度**：由于标准全局双向 Transformer 具有 $O(N^2)$ 的注意力计算复杂度，如果将 `max_tokens` 设得过大（例如应对极大 JSON），将导致显存爆炸。因此，对于非常冗长的文档数据，应当考虑预先过滤掉无用的嵌套字段，或在未来改进中引入稀疏注意力 (Sparse Attention) 机制。
+
 ---
 
 ## 六、数据流转核心结构
@@ -271,7 +285,6 @@ class LeafNode:
     path: List[str]         # 根到叶子的字段名列表, e.g., ["materials", "lattice", "a"]
     group_ids: List[int]    # 祖先数组元素对应的全局唯一组 ID, e.g., [14, 52]
 
-```python
 class JSONParser:
     def __init__(self):
         # 实例级计数器，确保多进程 DataLoader (num_workers>0) 下不发生状态冲突
@@ -296,6 +309,41 @@ class JSONParser:
                 new_groups = current_groups + [self.group_counter]
                 leaves.extend(self.parse(item, current_path, new_groups))
             return leaves
+```
+
+### 6.2 合成数据生成流 (`data/synthetic.py`)
+
+我们的合成数据不再只是简单的材料字典，而是包含了多类数学函数、推理任务和大量随机模板生成的丰富数据：
+
+**生成流程核心组件**：
+1. **FunctionRegistry / TextTaskGenerator**: 随机采样一条带有真实数学关系（如三角函数、代数等）或文本推理（如词汇属性）的任务数据（MathRelation / Task）。
+2. **TemplateEngine**: 从超过 100 种 JSON 结构模板（扁平、嵌套、数组、链式等）中随机选取一个，将 MathRelation 渲染成具有千变万化键名和树状结构的 JSON 字典。
+3. **Distractor Injector**: 随机向生成的 JSON 中插入完全无关的“干扰字段”（如 `id`, `timestamp`, `author`, `confidence` 等），强迫模型学会选择性忽略噪声。
+
+**数据流伪代码**：
+```python
+def __getitem__(self, idx):
+    # 1. 采样与渲染
+    if random.random() < self.text_task_ratio:
+        doc = TextTaskGenerator.generate()
+        inject_distractors(doc)
+    else:
+        rel = FunctionRegistry.sample()
+        doc = TemplateEngine.render(rel)
+        inject_distractors(doc)
+        
+    # 2. 解析成叶子节点序列
+    parser = JSONParser()
+    leaves = parser.parse(doc, ["doc"], [])
+    
+    # 3. 超长截断与随机 Mask
+    leaves = leaves[:self.max_tokens]
+    mask_indices = random.sample(range(len(leaves)), num_masks)
+    for i in mask_indices:
+        leaves[i].value = "[MASK]"
+        leaves[i].value_type = "mask"
+        
+    return leaves, target_masks
 ```
 
 ---
@@ -360,7 +408,56 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 
 ---
 
-## 八、验证计划 (Sanity Check)
+## 八、训练策略与课程学习 (Curriculum Learning)
+
+针对 Zero-shot / In-Context Learning (上下文学习) 规则推断的目标，必须采用**连续预训练（Continued Pre-training）**的课程学习策略，而不是简单的微调（SFT）或一开始就完全混合。这可以有效防止模型产生“捷径依赖（Shortcut Learning）”。
+
+### Stage 1：结构与显式规则基础训练（当前阶段）
+- **数据形态**：单条 JSON 或少量 JSON，内部包含显式的物理规律名称（如 `function: "band_gap_formula"`）或参数。
+- **训练目的**：让模型学会理解树状结构、路径编码（Path Encoding）、组嵌入（Group Embedding），以及基础的傅里叶数值计算和跨节点复制寻址。
+- **配置开关**：`train_mode = "explicit"`
+
+### Stage 2：连续预训练（强制上下文规则归纳 In-Context Rule Induction）
+- **切换时机**：Stage 1 的 Loss 趋于收敛且验证任务通过。
+- **数据形态**：包含多个对象的 JSON 数组（Few-shot 演示），**移除显式的 `function` 字段**。
+- **训练目的**：迫使模型激活多头注意力机制，跨越 JSON 组别观察前序数据的输入输出对，推断出隐含的数学规律，并应用到预测目标（`[MASK]`）上。
+
+**伪代码：Stage 2 隐式上下文数据生成 (`data/in_context_generator.py`)**
+```python
+def generate_in_context_task(num_shots=3):
+    # 1. 随机采样一个未知的数学关系（或物理公式）
+    rel = FunctionRegistry.sample()
+    
+    # 2. 生成多条演示数据 (shots) + 1条目标数据
+    context_jsons = []
+    for _ in range(num_shots):
+        # 渲染不带 function 名称的隐式推断 JSON
+        doc = TemplateEngine.render_implicit(rel) 
+        context_jsons.append(doc)
+        
+    target_doc = TemplateEngine.render_implicit(rel)
+    
+    # 3. 将它们放入一个数组中作为 In-Context Prompt
+    final_batch = {
+        "task_id": generate_uuid(),
+        "demonstrations": context_jsons,
+        "query": target_doc
+    }
+    
+    # 解析并 Mask Target
+    leaves = JSONParser().parse(final_batch, ["root"], [])
+    # 找到 query 里的目标值并 MASK (伪代码)
+    mask_target_node(leaves)
+    return leaves
+```
+
+### Stage 3：混合鲁棒性训练（可选）
+- **数据形态**：混合 Stage 1（显式指令）和 Stage 2（隐式上下文推断），并大量注入无意义的干扰字段（Distractors）。
+- **训练目的**：防止灾难性遗忘（Catastrophic Forgetting），增强模型在真实噪音环境下的鲁棒性。
+
+---
+
+## 九、验证计划 (Sanity Check)
 
 **强制执行**以下三阶段测试，任何阶段失败禁止进入下一阶段：
 
@@ -378,4 +475,4 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 - **断言判断**：Loss 同样必须收敛到趋于 0。证明 `-inf` 被正确应用，没有 Ghost Entanglement。
 
 ### 阶段 4：正式训练 (`train.py`)
-在合成数据生成器 (带有些微物理相关性噪音) 的无限流下训练 100 Epochs，保存 Checkpoint，运行 `inference.py`。
+在合成数据生成器 (带有些微物理相关性噪音) 的无限流下训练：先经过 Stage 1 学习基础架构，之后通过 Stage 2 注入 In-Context 归纳能力，保存 Checkpoint，运行 `inference.py`。
