@@ -23,7 +23,7 @@ class DocumentTransformer(nn.Module):
 
     def forward(self, 
                 batched_leaves: List[List[LeafNode]], 
-                padding_mask: Tensor) -> Tuple[Tensor, Tensor]:
+                padding_mask: Tensor) -> Tensor:
         """
         batched_leaves: batch 中每个样本的叶子节点列表
         padding_mask: (B, max_len)
@@ -87,14 +87,14 @@ class DocumentTransformer(nn.Module):
         if num_preds:
             preds_t = torch.cat(num_preds)
             targets_t = torch.tensor(num_targets, dtype=torch.float32, device=device)
-            # Huber Loss for numbers
-            loss = loss + F.huber_loss(preds_t, targets_t)
+            # Huber Loss for numbers (sum reduction，最后统一除以 count)
+            loss = loss + F.huber_loss(preds_t, targets_t, reduction='sum')
             count += len(num_preds)
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)
             targets_t = torch.tensor(bool_targets, dtype=torch.float32, device=device)
-            loss = loss + F.binary_cross_entropy_with_logits(preds_t, targets_t)
+            loss = loss + F.binary_cross_entropy_with_logits(preds_t, targets_t, reduction='sum')
             count += len(bool_preds)
             
         if str_preds:
@@ -104,7 +104,7 @@ class DocumentTransformer(nn.Module):
             # Cosine Embedding Loss
             # targets for cosine_embedding_loss should be 1 or -1. 1 means similar.
             y = torch.ones(len(str_preds), device=device)
-            loss = loss + F.cosine_embedding_loss(preds_t, targets_t, y)
+            loss = loss + F.cosine_embedding_loss(preds_t, targets_t, y, reduction='sum')
             count += len(str_preds)
             
         if count > 0:

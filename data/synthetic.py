@@ -53,11 +53,8 @@ class SyntheticDataset(Dataset):
         doc2 = generate_synthetic_document()
         
         parser = JSONParser()
-        # 顶层 group ID 区别开两个文档
-        leaves1 = parser.parse(doc1, ["materials"], [1])
-        leaves2 = parser.parse(doc2, ["materials"], [2])
-        
-        leaves = leaves1 + leaves2
+        # 将两个文档包装为数组，让 parser 统一管理 group_id，避免手工 ID 与 counter 冲突
+        leaves = parser.parse([doc1, doc2], ["materials"], [])
         
         target_masks = {}
         # 随机 Mask 一部分叶子节点
