@@ -560,15 +560,12 @@ def nested_labeled_values(rel, km):
 # C. 数组模板 (20 个) — 多条同类函数采样组成数组
 # ═══════════════════════════════════════════════════
 
-def _make_array_template(inner_template_fn):
-    """包装一个模板，使其生成包含 2-4 个采样点的数组。"""
+def _make_array_template(inner_template_fn, min_companions=1, max_companions=7):
+    """包装一个模板，使其生成包含多个采样点的数组。"""
     def array_template(rel, km):
         from ..functions.registry import FunctionRegistry
         items = [inner_template_fn(rel, km)]
-        # 用同一类函数再生成 1-3 个同伴
-        for _ in range(random.randint(1, 3)):
-            # 创建一个同函数的新采样
-            # 但使用相同的键名映射（同 schema 不同值）
+        for _ in range(random.randint(min_companions, max_companions)):
             companion = resample_relation(rel)
             items.append(inner_template_fn(companion, km))
         return items
@@ -596,11 +593,16 @@ def resample_relation(rel: MathRelation) -> MathRelation:
     )
 
 
-# 注册 10 个数组模板（基于不同的基础模板）
+# 注册标准数组模板 (2-8 个元素)
 for _base in [flat_basic, flat_no_func_name, flat_with_id, flat_terse,
               flat_labeled, nested_params_result, nested_io_split,
               nested_context_target, nested_source_derived, nested_record_fields]:
-    _TEMPLATES.append(_make_array_template(_base))
+    _TEMPLATES.append(_make_array_template(_base, min_companions=1, max_companions=7))
+
+# 注册大数组模板 (4-12 个元素) — 专门用于生成长序列
+for _base in [flat_basic, flat_no_func_name, flat_with_category,
+              nested_params_result, nested_meta_data]:
+    _TEMPLATES.append(_make_array_template(_base, min_companions=3, max_companions=11))
 
 
 # ═══════════════════════════════════════════════════

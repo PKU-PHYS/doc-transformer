@@ -86,7 +86,10 @@ def _rand_label():
     return "".join(letters) + str(random.randint(1, 99))
 
 
-# 所有干扰字段生成器
+# ═══════════════════════════════════════════════════
+# 标量干扰字段池
+# ═══════════════════════════════════════════════════
+
 DISTRACTOR_POOL = {
     # 文本类
     "id": _rand_id,
@@ -128,29 +131,156 @@ DISTRACTOR_POOL = {
 }
 
 
-def inject_distractors(doc: dict, n_min: int = 0, n_max: int = 5) -> dict:
+# ═══════════════════════════════════════════════════
+# 嵌套干扰生成器 (对象 / 数组)
+# ═══════════════════════════════════════════════════
+
+def _gen_nested_metadata():
+    """生成一个 metadata 嵌套对象 (3-5 叶子)"""
+    fields = {}
+    pool = [
+        ("created", _rand_timestamp),
+        ("modified", _rand_timestamp),
+        ("version", _rand_version),
+        ("author", _rand_author),
+        ("status", _rand_status),
+        ("source", _rand_source),
+        ("encoding", lambda: random.choice(["utf-8", "ascii"])),
+    ]
+    n = random.randint(3, min(5, len(pool)))
+    for key, fn in random.sample(pool, n):
+        fields[key] = fn()
+    return fields
+
+
+def _gen_nested_provenance():
+    """生成一个 provenance / 来源追踪嵌套对象 (3-6 叶子)"""
+    fields = {
+        "origin": random.choice(["local", "remote", "cloud", "archive"]),
+        "pipeline_version": _rand_version(),
+        "run_id": _rand_uuid(),
+    }
+    if random.random() < 0.5:
+        fields["parent_id"] = _rand_uuid()
+    if random.random() < 0.5:
+        fields["elapsed_ms"] = random.randint(10, 5000)
+    if random.random() < 0.5:
+        fields["retries"] = random.randint(0, 3)
+    return fields
+
+
+def _gen_nested_quality():
+    """生成一个 quality / 质量评估嵌套对象 (3-5 叶子)"""
+    fields = {
+        "confidence": _rand_confidence(),
+        "validated": _rand_verified(),
+    }
+    if random.random() < 0.7:
+        fields["error_bound"] = _rand_error()
+    if random.random() < 0.5:
+        fields["method"] = random.choice(["cross_validation", "bootstrap", "analytic", "monte_carlo"])
+    if random.random() < 0.5:
+        fields["sample_count"] = _rand_sample_size()
+    return fields
+
+
+def _gen_nested_config():
+    """生成一个 config 嵌套对象 (3-6 叶子)"""
+    fields = {
+        "tolerance": round(random.uniform(1e-6, 1e-2), 8),
+        "max_iterations": random.randint(100, 10000),
+    }
+    if random.random() < 0.6:
+        fields["algorithm"] = random.choice(["newton", "bisection", "gradient_descent", "simplex", "bfgs"])
+    if random.random() < 0.5:
+        fields["convergence"] = _rand_converged()
+    if random.random() < 0.5:
+        fields["seed"] = random.randint(0, 2**16)
+    if random.random() < 0.4:
+        fields["precision"] = _rand_precision()
+    return fields
+
+
+def _gen_array_tags():
+    """生成一个 tags 数组 (2-5 叶子)"""
+    all_tags = ["math", "science", "physics", "algebra", "geometry",
+                "calculus", "trigonometry", "statistics", "analysis",
+                "validated", "draft", "v2", "production", "experimental",
+                "numerical", "symbolic", "applied", "theoretical"]
+    n = random.randint(2, 5)
+    return random.sample(all_tags, n)
+
+
+def _gen_array_references():
+    """生成一个 references 数组 (2-4 叶子)"""
+    refs = [f"ref_{random.randint(100,999)}" for _ in range(random.randint(2, 4))]
+    return refs
+
+
+def _gen_array_log_entries():
+    """生成一个嵌套数组: log 条目 (每条 2-3 叶子, 共 2-4 条 = 4-12 叶子)"""
+    entries = []
+    n = random.randint(2, 4)
+    for _ in range(n):
+        entry = {
+            "timestamp": _rand_timestamp(),
+            "event": random.choice(["start", "checkpoint", "complete", "retry", "error"]),
+        }
+        if random.random() < 0.5:
+            entry["duration_ms"] = random.randint(1, 500)
+        entries.append(entry)
+    return entries
+
+
+# 嵌套干扰池: key -> generator
+NESTED_DISTRACTOR_POOL = {
+    # 嵌套对象 (每个产出 3-6 叶子)
+    "metadata": _gen_nested_metadata,
+    "provenance": _gen_nested_provenance,
+    "quality": _gen_nested_quality,
+    "solver_config": _gen_nested_config,
+    # 数组 (每个产出 2-12 叶子)
+    "tags": _gen_array_tags,
+    "references": _gen_array_references,
+    "log": _gen_array_log_entries,
+}
+
+
+# ═══════════════════════════════════════════════════
+# 注入接口
+# ═══════════════════════════════════════════════════
+
+def inject_distractors(doc: dict, n_min: int = 0, n_max: int = 5,
+                       nested_prob: float = 0.0) -> dict:
     """
     向文档中注入随机干扰字段。
 
     Args:
         doc: 原始文档 dict
-        n_min: 最少注入字段数
-        n_max: 最多注入字段数
+        n_min: 最少注入标量字段数
+        n_max: 最多注入标量字段数
+        nested_prob: 注入嵌套干扰的概率 (0.0-1.0)。
+                     设为 >0 时，在标量干扰之外，额外注入 1-3 个嵌套对象/数组。
 
     Returns:
         注入干扰字段后的文档（原地修改 + 返回）
     """
+    # ── 标量干扰 ──
     n = random.randint(n_min, n_max)
-    if n == 0:
-        return doc
+    if n > 0:
+        available = [k for k in DISTRACTOR_POOL if k not in doc]
+        if available:
+            chosen = random.sample(available, min(n, len(available)))
+            for key in chosen:
+                doc[key] = DISTRACTOR_POOL[key]()
 
-    # 从池中选取不与现有键冲突的干扰字段
-    available = [k for k in DISTRACTOR_POOL if k not in doc]
-    if not available:
-        return doc
-
-    chosen = random.sample(available, min(n, len(available)))
-    for key in chosen:
-        doc[key] = DISTRACTOR_POOL[key]()
+    # ── 嵌套干扰 ──
+    if nested_prob > 0 and random.random() < nested_prob:
+        n_nested = random.randint(1, 3)
+        available_nested = [k for k in NESTED_DISTRACTOR_POOL if k not in doc]
+        if available_nested:
+            chosen_nested = random.sample(available_nested, min(n_nested, len(available_nested)))
+            for key in chosen_nested:
+                doc[key] = NESTED_DISTRACTOR_POOL[key]()
 
     return doc
