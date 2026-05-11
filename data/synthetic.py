@@ -22,6 +22,7 @@ from data.functions import FunctionRegistry
 from data.templates.engine import TemplateEngine
 from data.templates.distractors import inject_distractors
 from data.text_tasks.generators import TextTaskGenerator
+from data.in_context_generator import generate_in_context_task
 
 
 # ═══════════════════════════════════════════════════
@@ -110,21 +111,33 @@ class SyntheticDataset(Dataset):
         text_task_ratio: 文本任务占比 (0.0-1.0)
         max_tokens: 单样本最大叶子数，超过则截断。None 表示不限制。
         use_old_generator: 是否使用旧版生成器（用于兼容性测试）
+        train_mode: 训练模式，"explicit" (单JSON) 或 "in_context" (Few-shot推断) 或 "mixed"
     """
     def __init__(self, size: int, mask_ratio: float = 0.15,
                  text_task_ratio: float = 0.2,
                  max_tokens: int = 512,
-                 use_old_generator: bool = False):
+                 use_old_generator: bool = False,
+                 train_mode: str = "explicit"):
         self.size = size
         self.mask_ratio = mask_ratio
         self.text_task_ratio = text_task_ratio
         self.max_tokens = max_tokens
         self.use_old_generator = use_old_generator
+        self.train_mode = train_mode
 
     def __len__(self):
         return self.size
 
     def __getitem__(self, idx) -> Tuple[List[LeafNode], Dict[int, Any]]:
+        # 模式判定
+        current_mode = self.train_mode
+        if current_mode == "mixed":
+            current_mode = random.choice(["explicit", "in_context"])
+
+        if current_mode == "in_context":
+            num_shots = random.randint(1, 4)
+            return generate_in_context_task(num_shots=num_shots, max_tokens=self.max_tokens)
+
         if self.use_old_generator:
             # 旧版逻辑：生成两个材料文档
             doc1 = generate_synthetic_document_old()

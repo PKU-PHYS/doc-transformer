@@ -569,13 +569,13 @@ def _make_array_template(inner_template_fn):
         for _ in range(random.randint(1, 3)):
             # 创建一个同函数的新采样
             # 但使用相同的键名映射（同 schema 不同值）
-            companion = _resample_relation(rel)
+            companion = resample_relation(rel)
             items.append(inner_template_fn(companion, km))
         return items
     return array_template
 
 
-def _resample_relation(rel: MathRelation) -> MathRelation:
+def resample_relation(rel: MathRelation) -> MathRelation:
     """用同一个函数重新采样变量值（快速近似）。"""
     import math
     new_vars = {}
@@ -706,6 +706,22 @@ class TemplateEngine:
             doc = _post_maybe_flatten_single_nested(doc)
 
         return doc
+
+    @staticmethod
+    def render_implicit(rel: MathRelation) -> Any:
+        """
+        以隐式（不包含函数名）的方式渲染 MathRelation。
+        主要用于生成 In-Context Learning 的 demonstrations。
+        """
+        implicit_rel = MathRelation(
+            func_name=rel.func_name,
+            func_synonyms=rel.func_synonyms,
+            category=rel.category,
+            variables=rel.variables,
+            var_synonyms=rel.var_synonyms,
+            include_func_name=False,
+        )
+        return TemplateEngine.render(implicit_rel)
 
     @staticmethod
     def template_count() -> int:
