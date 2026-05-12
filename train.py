@@ -15,6 +15,7 @@
 import os
 import time
 import json
+import random
 import argparse
 import torch
 import matplotlib
@@ -29,6 +30,40 @@ from config import ModelConfig, TrainConfig
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from data.synthetic import SyntheticDataset, collate_fn
+
+
+SEED = 42
+
+
+def set_seed(seed: int):
+    """设置所有随机源的种子，确保完全可复现。"""
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # 强制 cuDNN 使用确定性算法（会略微降速 ~5%）
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def get_rng_states() -> dict:
+    """捕获所有随机源的状态，用于 checkpoint 保存。"""
+    states = {
+        "python_rng": random.getstate(),
+        "torch_rng": torch.random.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        states["cuda_rng"] = torch.cuda.get_rng_state_all()
+    return states
+
+
+def set_rng_states(states: dict):
+    """从 checkpoint 恢复所有随机源的状态。"""
+    if "python_rng" in states:
+        random.setstate(states["python_rng"])
+    if "torch_rng" in states:
+        torch.random.set_rng_state(states["torch_rng"])
+    if "cuda_rng" in states and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(states["cuda_rng"])
 
 
 def plot_loss_curves(all_logs: dict, save_dir: str):
@@ -284,6 +319,9 @@ def train_stage(
         resume_steps = start_epoch * steps_per_epoch
         for _ in range(resume_steps):
             scheduler.step()
+        # 恢复随机状态，确保数据生成和 dropout 等完全一致
+        if "rng_states" in resume_ckpt:
+            set_rng_states(resume_ckpt["rng_states"])
         resumed_lr = optimizer.param_groups[0]["lr"]
         print(f"  🔄 Resumed: epoch={start_epoch}, best_loss={best_loss:.6f}, "
               f"global_step={global_step}, lr={resumed_lr:.2e}")
@@ -449,6 +487,8 @@ def save_checkpoint(model, name, checkpoint_dir, log=None,
         ckpt["stage"] = stage_name
     if global_step is not None:
         ckpt["global_step"] = global_step
+    # 保存随机状态，确保 resume 后完全可复现
+    ckpt["rng_states"] = get_rng_states()
     torch.save(ckpt, ckpt_path)
     print(f"  💾 Checkpoint: {ckpt_path}")
     if log is not None:
@@ -463,6 +503,9 @@ def main():
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint .pth to resume from")
     args = parser.parse_args()
+
+    # 全局 seed — 保证每次从头跑都完全一致
+    set_seed(SEED)
 
     model_config = ModelConfig()
     train_config = TrainConfig()
