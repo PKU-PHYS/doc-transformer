@@ -23,7 +23,9 @@ class TokenEmbedding(nn.Module):
             d_model=config.d_model,
             frozen_lm_dim=config.frozen_lm_dim,
             n_fourier_feats=config.n_fourier_feats,
-            fourier_learnable=config.fourier_learnable
+            fourier_learnable=config.fourier_learnable,
+            n_exponent_bins=config.n_exponent_bins,
+            exponent_offset=config.exponent_offset,
         )
         
         self.path_encoding_type = config.path_encoding

@@ -21,6 +21,10 @@ class ModelConfig:
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
     
+    # 科学计数法解构 (Mantissa-Exponent Split)
+    n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
+    exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
+    
     # 组嵌入缩放
     group_scale: float = 0.1    # 随机向量 L2 归一化后的模长 (降低以平衡 val/path 量级)
 
