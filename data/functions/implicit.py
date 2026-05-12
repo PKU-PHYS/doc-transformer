@@ -26,13 +26,16 @@ def _register_implicit(name, synonyms, category, var_defs, satisfy):
             vars_dict[role] = random.uniform(lo, hi)
         # satisfy 用采样值计算依赖变量，使方程精确成立
         vars_dict = satisfy(vars_dict)
-        # 过滤无穷/NaN
+        # 过滤无穷/NaN/极端值
+        retry = False
         for v in vars_dict.values():
-            if not math.isfinite(v):
-                # retry with safe values
-                vars_dict = {role: (lo+hi)/2 for role, _, (lo, hi) in var_defs}
-                vars_dict = satisfy(vars_dict)
+            if not math.isfinite(v) or abs(v) > 10000.0:
+                retry = True
                 break
+        if retry:
+            # retry with safe values
+            vars_dict = {role: (lo+hi)/2 for role, _, (lo, hi) in var_defs}
+            vars_dict = satisfy(vars_dict)
         variables = {role: round(v, 6) for role, v in vars_dict.items()}
         var_syns = {role: keys for role, keys, _ in var_defs}
         return MathRelation(
@@ -42,6 +45,7 @@ def _register_implicit(name, synonyms, category, var_defs, satisfy):
             variables=variables,
             var_synonyms=var_syns,
             include_func_name=True,
+            _generator=generator,
         )
     FunctionRegistry.register(generator)
     return generator

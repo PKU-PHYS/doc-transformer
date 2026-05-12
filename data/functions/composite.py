@@ -83,6 +83,7 @@ def _composite_generator():
             variables=variables,
             var_synonyms=var_syns,
             include_func_name=False,  # 复合函数名太长，不作为单独字段
+            _generator=_composite_generator,
         )
 
     # fallback: sin(cos(x))
@@ -98,6 +99,7 @@ def _composite_generator():
         var_synonyms={"input": _INPUT_KEYS, "mid": _MID_KEYS, "output": _FINAL_KEYS,
                       "inner_func": _INNER_FUNC_KEYS, "outer_func": _OUTER_FUNC_KEYS},
         include_func_name=False,
+        _generator=_composite_generator,
     )
 
 

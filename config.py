@@ -22,7 +22,7 @@ class ModelConfig:
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
     
     # 组嵌入缩放
-    group_scale: float = 1.0    # 随机向量 L2 归一化后的模长
+    group_scale: float = 0.1    # 随机向量 L2 归一化后的模长 (降低以平衡 val/path 量级)
 
 @dataclass
 class TrainConfig:

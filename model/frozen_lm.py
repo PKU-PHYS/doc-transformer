@@ -43,6 +43,9 @@ class FrozenLM:
                 
         # 批量处理未命中的
         if miss_texts:
+            # 防止缓存无限膨胀导致 GPU 显存泄漏
+            if len(self._cache) > 10000:
+                self._cache.clear()
             with torch.no_grad():
                 # encode 返回的是 numpy array 或是 tensor 取决于 convert_to_tensor
                 embs = self.model.encode(miss_texts, convert_to_tensor=True, show_progress_bar=False)

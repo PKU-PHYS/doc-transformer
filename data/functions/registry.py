@@ -24,6 +24,7 @@ class MathRelation:
     variables: Dict[str, Any]               # role -> value，如 {"input": 1.5, "output": 0.997}
     var_synonyms: Dict[str, List[str]]      # role -> 键名同义词列表
     include_func_name: bool = True          # 是否在文档中包含函数名字段
+    _generator: Optional[Callable] = None   # 生成此关系的 generator，用于重采样
 
 
 class FunctionRegistry:
@@ -39,6 +40,11 @@ class FunctionRegistry:
     def sample(cls) -> MathRelation:
         gen = random.choice(cls._generators)
         return gen()
+
+    @classmethod
+    def sample_generator(cls) -> Callable[[], MathRelation]:
+        """返回一个 generator 函数的引用，可多次调用获取同类函数的不同采样。"""
+        return random.choice(cls._generators)
 
     @classmethod
     def count(cls) -> int:
@@ -99,11 +105,13 @@ CATEGORY_KEYS = [
 # 工厂函数
 # ─────────────────────────────────────────────
 
-def _safe_compute(compute_fn, x):
-    """安全计算，捕获 domain error 并返回 None。"""
+def _safe_compute(compute_fn, x, max_abs=10000.0):
+    """安全计算，捕获 domain error 并拒绝过大的值。"""
     try:
         y = compute_fn(x)
         if not math.isfinite(y):
+            return None
+        if abs(y) > max_abs:
             return None
         return y
     except (ValueError, ZeroDivisionError, OverflowError):
@@ -129,13 +137,15 @@ def make_unary_generator(
             x = random.uniform(*domain)
             y = _safe_compute(compute, x)
             if y is not None:
-                return MathRelation(
+                rel = MathRelation(
                     func_name=name,
                     func_synonyms=synonyms,
                     category=category,
                     variables={"input": round(x, 6), "output": round(y, 6)},
                     var_synonyms={"input": _in_keys, "output": _out_keys},
+                    _generator=generator,
                 )
+                return rel
         # fallback: 使用域中心
         x = (domain[0] + domain[1]) / 2
         y = compute(x)
@@ -145,6 +155,7 @@ def make_unary_generator(
             category=category,
             variables={"input": round(x, 6), "output": round(y, 6)},
             var_synonyms={"input": _in_keys, "output": _out_keys},
+            _generator=generator,
         )
 
     FunctionRegistry.register(generator)
@@ -180,6 +191,7 @@ def make_binary_generator(
                     category=category,
                     variables={"input_a": round(a, 6), "input_b": round(b, 6), "output": round(y, 6)},
                     var_synonyms={"input_a": _a_keys, "input_b": _b_keys, "output": _out_keys},
+                    _generator=generator,
                 )
         a = (domain_a[0] + domain_a[1]) / 2
         b = (domain_b[0] + domain_b[1]) / 2
@@ -190,6 +202,7 @@ def make_binary_generator(
             category=category,
             variables={"input_a": round(a, 6), "input_b": round(b, 6), "output": round(y, 6)},
             var_synonyms={"input_a": _a_keys, "input_b": _b_keys, "output": _out_keys},
+            _generator=generator,
         )
 
     FunctionRegistry.register(generator)
@@ -232,6 +245,7 @@ def make_multivar_generator(
                     category=category,
                     variables=variables,
                     var_synonyms=var_syns,
+                    _generator=generator,
                 )
         # fallback with midpoints
         inputs = {role: (lo + hi) / 2 for role, _, (lo, hi) in var_defs}
@@ -246,6 +260,7 @@ def make_multivar_generator(
             category=category,
             variables=variables,
             var_synonyms=var_syns,
+            _generator=generator,
         )
 
     FunctionRegistry.register(generator)

@@ -10,7 +10,7 @@ import random
 from typing import List, Tuple, Dict, Any, Optional
 
 from data.functions.registry import FunctionRegistry
-from data.templates.engine import TemplateEngine, resample_relation
+from data.templates.engine import TemplateEngine
 from data.templates.distractors import inject_distractors
 from model.json_parser import JSONParser, LeafNode
 
@@ -36,8 +36,8 @@ def generate_in_context_task(
         max_tokens: 截断上限。
         distractor_level: 干扰强度 (0=无, 1=轻度, 2=中度, 3=重度)。
     """
-    # 1. 随机采样一个数学关系
-    rel = FunctionRegistry.sample()
+    # 1. 拿到一个 generator 引用，多次调用获取正确数据
+    gen = FunctionRegistry.sample_generator()
 
     # 2. 决定 shots 数量
     if num_shots is not None:
@@ -57,7 +57,7 @@ def generate_in_context_task(
     # 3. 生成 demonstrations + query
     context_jsons = []
     for _ in range(actual_shots):
-        companion_rel = resample_relation(rel)
+        companion_rel = gen()
         doc = TemplateEngine.render_implicit(companion_rel)
         # 根据干扰等级注入干扰
         if isinstance(doc, dict) and distractor_level > 0:
@@ -66,7 +66,7 @@ def generate_in_context_task(
             inject_distractors(doc, n_min=0, n_max=n_max, nested_prob=nested_prob)
         context_jsons.append(doc)
 
-    target_rel = resample_relation(rel)
+    target_rel = gen()
     target_doc = TemplateEngine.render_implicit(target_rel)
 
     # 4. 构造 final_batch

@@ -127,7 +127,8 @@ def train_stage(
     print(f"  distractor_level={distractor_level}")
     print(f"{'='*70}\n")
 
-    optimizer = AdamW(model.parameters(), lr=train_config.lr, weight_decay=0.01)
+    optimizer = AdamW(model.parameters(), lr=train_config.lr, 
+                      weight_decay=0.01, betas=(0.9, 0.95))
     
     # 预估总步数和 Warmup 步数
     steps_per_epoch = dataset_size // train_config.batch_size
@@ -139,6 +140,13 @@ def train_stage(
         num_warmup_steps=warmup_steps, 
         num_training_steps=total_steps
     )
+    
+    # BF16 混精度训练 — 提速 ~2x，动态范围与 FP32 相同
+    use_amp = device == "cuda" and torch.cuda.is_bf16_supported()
+    amp_dtype = torch.bfloat16 if use_amp else torch.float32
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    if use_amp:
+        print(f"  ⚡ BF16 mixed precision enabled")
 
     stage_log = {
         "stage": stage_name,
@@ -179,12 +187,16 @@ def train_stage(
             padding_mask = padding_mask.to(device)
 
             optimizer.zero_grad()
-            out = model(batched_leaves, padding_mask)
-            loss = model.compute_loss(out, batched_leaves, batched_masks)
+            
+            with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
+                out = model(batched_leaves, padding_mask)
+                loss = model.compute_loss(out, batched_leaves, batched_masks)
 
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             batch_loss = loss.item()
             epoch_loss += batch_loss

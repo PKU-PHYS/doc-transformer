@@ -62,4 +62,4 @@ make_unary_generator("frac", ["frac", "fractional_part", "decimal_part", "mantis
 
 make_unary_generator("erf", ["erf", "error_function", "gauss_error", "probability_integral"], "special", math.erf, (-3, 3))
 make_unary_generator("degrees", ["degrees", "rad_to_deg", "to_degrees", "radians_to_degrees"], "conversion", math.degrees, (-6.28, 6.28))
-make_unary_generator("radians", ["radians", "deg_to_rad", "to_radians", "degrees_to_radians"], "conversion", math.radians, (-360, 360))
+make_unary_generator("radians", ["radians", "deg_to_rad", "to_radians", "degrees_to_radians"], "conversion", math.radians, (-180, 180))

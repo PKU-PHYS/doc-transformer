@@ -19,7 +19,7 @@ from model.json_parser import LeafNode, JSONParser
 
 # 数据生成模块
 from data.functions import FunctionRegistry
-from data.templates.engine import TemplateEngine, resample_relation
+from data.templates.engine import TemplateEngine
 from data.templates.distractors import inject_distractors
 from data.text_tasks.generators import TextTaskGenerator
 from data.in_context_generator import generate_in_context_task
@@ -147,11 +147,11 @@ def generate_array_document(
 
     典型输出 token 数: n_items × 5-12 + distractors = 30-100+
     """
-    rel = FunctionRegistry.sample()
+    gen = FunctionRegistry.sample_generator()
     items = []
 
     for _ in range(n_items):
-        companion = resample_relation(rel)
+        companion = gen()
         item = TemplateEngine.render(companion)
         if isinstance(item, dict):
             inject_distractors(item, n_min=0, n_max=distractor_per_item,
@@ -191,11 +191,10 @@ def generate_mixed_long_document(target_tokens: int = 100) -> Dict[str, Any]:
             section = TextTaskGenerator.generate()
         else:
             # 小数组
-            rel = FunctionRegistry.sample()
+            gen = FunctionRegistry.sample_generator()
             items = []
             for _ in range(random.randint(2, 4)):
-                comp = resample_relation(rel)
-                items.append(TemplateEngine.render(comp))
+                items.append(TemplateEngine.render(gen()))
             section = items
 
         key = f"{random.choice(_SECTION_KEYS)}_{section_idx}"
@@ -335,9 +334,18 @@ class SyntheticDataset(Dataset):
             leaves = leaves[:self.max_tokens]
 
         target_masks = {}
-        # 随机 Mask 一部分叶子节点（在截断后的范围内）
+        # 优先 mask 数值节点（有数学关系可学），再补充其他类型
         num_masks = max(1, int(len(leaves) * self.mask_ratio))
-        mask_indices = random.sample(range(len(leaves)), min(num_masks, len(leaves)))
+        num_indices = [i for i, l in enumerate(leaves) if l.value_type == "number"]
+        other_indices = [i for i, l in enumerate(leaves) if l.value_type != "number"]
+        # 优先选数值，不够再从其他类型补
+        if len(num_indices) >= num_masks:
+            mask_indices = random.sample(num_indices, num_masks)
+        else:
+            mask_indices = list(num_indices)
+            remaining = num_masks - len(mask_indices)
+            if other_indices and remaining > 0:
+                mask_indices += random.sample(other_indices, min(remaining, len(other_indices)))
 
         for i in mask_indices:
             orig_node = leaves[i]

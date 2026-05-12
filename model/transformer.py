@@ -10,6 +10,8 @@ class GlobalTransformer(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         
+        self.emb_norm = nn.LayerNorm(config.d_model)
+        
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.d_model,
             nhead=config.n_heads,
@@ -22,7 +24,8 @@ class GlobalTransformer(nn.Module):
         
         self.encoder = nn.TransformerEncoder(
             encoder_layer, 
-            num_layers=config.n_layers
+            num_layers=config.n_layers,
+            enable_nested_tensor=False
         )
         self.out_norm = nn.LayerNorm(config.d_model)
 
@@ -31,6 +34,7 @@ class GlobalTransformer(nn.Module):
         x: (B, seq_len, d_model)
         padding_mask: (B, seq_len) Boolean Tensor, True 表示是 <PAD>，会被赋 -inf
         """
+        x = self.emb_norm(x)
         out = self.encoder(x, src_key_padding_mask=padding_mask)
         out = self.out_norm(out)
         return out

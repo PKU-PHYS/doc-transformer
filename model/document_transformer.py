@@ -34,12 +34,15 @@ class DocumentTransformer(nn.Module):
         
         x_emb = torch.zeros((B, max_len, self.config.d_model), device=device)
         
-        for b, leaves in enumerate(batched_leaves):
-            if leaves:
-                embs = self.token_embedder(leaves, self.frozen_lm)
-                x_emb[b, :len(leaves), :] = embs
+        # 嵌入阶段关闭 autocast：大量手动张量赋值与 BF16 不兼容，
+        # 且嵌入只占 <1% 算力。Transformer 主干仍在外层 autocast 下享受 BF16。
+        with torch.amp.autocast('cuda', enabled=False):
+            for b, leaves in enumerate(batched_leaves):
+                if leaves:
+                    embs = self.token_embedder(leaves, self.frozen_lm)
+                    x_emb[b, :len(leaves), :] = embs
                 
-        # (B, max_len, d_model)
+        # (B, max_len, d_model) — Transformer 主干在外层 autocast 下运行
         out = self.transformer(x_emb, padding_mask=padding_mask)
         return out
         
@@ -87,25 +90,23 @@ class DocumentTransformer(nn.Module):
         if num_preds:
             preds_t = torch.cat(num_preds)
             targets_t = torch.tensor(num_targets, dtype=torch.float32, device=device)
-            # Huber Loss for numbers (sum reduction，最后统一除以 count)
-            loss = loss + F.huber_loss(preds_t, targets_t, reduction='sum')
-            count += len(num_preds)
+            # arcsinh 压缩空间中计算 Huber Loss，消除极端值导致的梯度方差
+            loss = loss + F.huber_loss(torch.arcsinh(preds_t), torch.arcsinh(targets_t), reduction='mean')
+            count += 1
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)
             targets_t = torch.tensor(bool_targets, dtype=torch.float32, device=device)
-            loss = loss + F.binary_cross_entropy_with_logits(preds_t, targets_t, reduction='sum')
-            count += len(bool_preds)
+            loss = loss + F.binary_cross_entropy_with_logits(preds_t, targets_t, reduction='mean')
+            count += 1
             
         if str_preds:
             preds_t = torch.cat(str_preds) # (N_str, lm_dim)
             with torch.no_grad():
                 targets_t = self.frozen_lm.encode(str_targets) # (N_str, lm_dim)
-            # Cosine Embedding Loss
-            # targets for cosine_embedding_loss should be 1 or -1. 1 means similar.
             y = torch.ones(len(str_preds), device=device)
-            loss = loss + F.cosine_embedding_loss(preds_t, targets_t, y, reduction='sum')
-            count += len(str_preds)
+            loss = loss + F.cosine_embedding_loss(preds_t, targets_t, y, reduction='mean')
+            count += 1
             
         if count > 0:
             return loss / count

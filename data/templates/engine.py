@@ -563,34 +563,23 @@ def nested_labeled_values(rel, km):
 def _make_array_template(inner_template_fn, min_companions=1, max_companions=7):
     """包装一个模板，使其生成包含多个采样点的数组。"""
     def array_template(rel, km):
-        from ..functions.registry import FunctionRegistry
         items = [inner_template_fn(rel, km)]
+        gen = rel._generator
         for _ in range(random.randint(min_companions, max_companions)):
-            companion = resample_relation(rel)
-            items.append(inner_template_fn(companion, km))
+            companion = gen() if gen else rel
+            # companion 可能来自同一 generator 但角色名不同，需要用自己的 km
+            companion_km = _pick_keys(companion) if companion is not rel else km
+            items.append(inner_template_fn(companion, companion_km))
         return items
     return array_template
 
 
 def resample_relation(rel: MathRelation) -> MathRelation:
-    """用同一个函数重新采样变量值（快速近似）。"""
-    import math
-    new_vars = {}
-    for role, val in rel.variables.items():
-        if isinstance(val, (int, float)):
-            # 在原值附近重新采样
-            noise = random.gauss(0, max(abs(val) * 0.5, 1.0))
-            new_vars[role] = round(val + noise, 6)
-        else:
-            new_vars[role] = val  # 文本变量保持不变
-    return MathRelation(
-        func_name=rel.func_name,
-        func_synonyms=rel.func_synonyms,
-        category=rel.category,
-        variables=new_vars,
-        var_synonyms=rel.var_synonyms,
-        include_func_name=rel.include_func_name,
-    )
+    """调用原始 generator 重新采样一条数学正确的关系。"""
+    if rel._generator is not None:
+        return rel._generator()
+    # fallback: 如果没有 generator 引用，返回自身（不应发生）
+    return rel
 
 
 # 注册标准数组模板 (2-8 个元素)
