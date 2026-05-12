@@ -96,6 +96,73 @@ def plot_loss_curves(all_logs: dict, save_dir: str):
     print(f"  📊 Global loss plot: {path}")
 
 
+@torch.no_grad()
+def _log_sample_case(model, out, batched_leaves, batched_masks,
+                     sample_idx=0, stage_name="", epoch=0, batch_idx=0):
+    """诊断输出：展示一个样本的输入、mask、预测值和真实值。"""
+    if sample_idx >= len(batched_leaves):
+        return
+    
+    leaves = batched_leaves[sample_idx]
+    masks = batched_masks[sample_idx]
+    
+    if not leaves or not masks:
+        return
+    
+    print(f"\n  {'─'*60}")
+    print(f"  🔍 Sample Case [{stage_name}] E{epoch:03d} B{batch_idx:04d}")
+    print(f"  {'─'*60}")
+    
+    # 显示所有叶子节点（简化路径）
+    print(f"  📋 Leaves ({len(leaves)} tokens):")
+    for i, leaf in enumerate(leaves):
+        path_str = ".".join(leaf.path[-2:]) if len(leaf.path) > 2 else ".".join(leaf.path)
+        is_masked = i in masks
+        marker = "  🎯" if is_masked else ""
+        
+        if leaf.value_type == "number":
+            val_str = f"{leaf.value:.4g}"
+        elif leaf.value_type == "string":
+            val_str = f'"{leaf.value[:20]}"' if len(str(leaf.value)) > 20 else f'"{leaf.value}"'
+        elif leaf.value_type == "boolean":
+            val_str = str(leaf.value)
+        else:
+            val_str = leaf.value
+        
+        # 只打印前 15 个 + 被 mask 的
+        if i < 15 or is_masked:
+            print(f"    [{i:3d}] {path_str:30s} = {val_str:15s} ({leaf.value_type}){marker}")
+        elif i == 15:
+            print(f"    ... ({len(leaves) - 15} more tokens)")
+    
+    # 显示 mask 预测 vs 真实值
+    print(f"\n  🎯 Masked predictions ({len(masks)} masks):")
+    sample_out = out[sample_idx]  # (max_len, d_model)
+    
+    for idx, (truth_val, truth_type) in masks.items():
+        mask_repr = sample_out[idx].unsqueeze(0)
+        
+        if truth_type == "number":
+            pred_raw = model.decode_head.predict_number(mask_repr).item()
+            truth_f = float(truth_val)
+            err = abs(pred_raw - truth_f)
+            rel_err = err / (abs(truth_f) + 1e-8)
+            print(f"    [{idx:3d}] number: pred={pred_raw:12.4f}  true={truth_f:12.4f}  "
+                  f"err={err:.4f} ({rel_err:.1%})")
+        elif truth_type == "boolean":
+            pred_logit = model.decode_head.predict_boolean(mask_repr).item()
+            pred_bool = pred_logit > 0
+            print(f"    [{idx:3d}]   bool: pred={pred_bool} (logit={pred_logit:.3f})  "
+                  f"true={truth_val}")
+        elif truth_type == "string":
+            pred_emb = model.decode_head.predict_string(mask_repr)
+            target_emb = model.frozen_lm.encode([truth_val])
+            cos_sim = torch.nn.functional.cosine_similarity(pred_emb, target_emb).item()
+            print(f"    [{idx:3d}] string: cos_sim={cos_sim:.4f}  true=\"{truth_val}\"")
+    
+    print(f"  {'─'*60}\n")
+
+
 def train_stage(
     model: DocumentTransformer,
     frozen_lm: FrozenLM,
@@ -111,6 +178,7 @@ def train_stage(
     writer: SummaryWriter = None,
     global_step: int = 0,
     checkpoint_interval: int = 5,
+    resume_ckpt: dict = None,
 ) -> dict:
     """
     训练单个 Stage，基于 loss plateau 自动结束。
@@ -119,6 +187,7 @@ def train_stage(
         max_epochs: 该 Stage 最大 epoch 数上限（保底退出）
         patience: 连续 N 个 epoch loss 不下降则视为收敛
         checkpoint_interval: 每 N 个 epoch 保存一次 checkpoint
+        resume_ckpt: 恢复用的 checkpoint dict，含 optimizer/scheduler/scaler/epoch/best_loss
 
     Returns:
         stage_log: 包含 loss 历史的 dict
@@ -152,18 +221,35 @@ def train_stage(
     if use_amp:
         print(f"  ⚡ BF16 mixed precision enabled")
 
+    # 恢复训练状态
+    start_epoch = 0
+    best_loss = float("inf")
+    patience_counter = 0
+    if resume_ckpt is not None:
+        if "optimizer" in resume_ckpt:
+            optimizer.load_state_dict(resume_ckpt["optimizer"])
+        if "scheduler" in resume_ckpt:
+            scheduler.load_state_dict(resume_ckpt["scheduler"])
+        if "scaler" in resume_ckpt:
+            scaler.load_state_dict(resume_ckpt["scaler"])
+        if "epoch" in resume_ckpt:
+            start_epoch = resume_ckpt["epoch"]
+        if "best_loss" in resume_ckpt:
+            best_loss = resume_ckpt["best_loss"]
+        if "global_step" in resume_ckpt:
+            global_step = resume_ckpt["global_step"]
+        print(f"  \U0001f504 Resumed: epoch={start_epoch}, best_loss={best_loss:.6f}, global_step={global_step}")
+
     stage_log = {
         "stage": stage_name,
         "losses": [],
         "epoch_times": [],
-        "best_loss": float("inf"),
+        "best_loss": best_loss,
         "stopped_at_epoch": 0,
         "reason": "",
     }
-    best_loss = float("inf")
-    patience_counter = 0
 
-    for epoch in range(max_epochs):
+    for epoch in range(start_epoch, max_epochs):
         epoch_start = time.time()
 
         # 每个 epoch 生成新数据
@@ -213,6 +299,12 @@ def train_stage(
                 writer.add_scalar(f"{stage_name}/lr", optimizer.param_groups[0]["lr"], global_step)
                 writer.add_scalar(f"{stage_name}/grad_norm", grad_norm.item(), global_step)
 
+            # ── 诊断输出：每 200 batch 展示一个案例 ──
+            if batch_idx % 200 == 0 and batch_idx > 0:
+                _log_sample_case(model, out, batched_leaves, batched_masks, 
+                                 sample_idx=0, stage_name=stage_name, 
+                                 epoch=epoch+1, batch_idx=batch_idx)
+
             if batch_idx % 50 == 0:
                 avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
                 lr_now = optimizer.param_groups[0]["lr"]
@@ -261,10 +353,14 @@ def train_stage(
                 writer.add_scalar(f"{stage_name}/gpu_peak_GiB", mem_peak, epoch + 1)
             writer.flush()
 
-        # ── 定期保存 checkpoint ──
+        # ── 定期保存 checkpoint（含完整训练状态）──
         if (epoch + 1) % checkpoint_interval == 0:
             save_checkpoint(model, f"{stage_name}_e{epoch+1}",
-                            train_config.checkpoint_dir)
+                            train_config.checkpoint_dir,
+                            optimizer=optimizer, scheduler=scheduler,
+                            scaler=scaler, epoch=epoch+1,
+                            best_loss=best_loss, stage_name=stage_name,
+                            global_step=global_step)
 
         # ── 收敛退出 ──
         if patience_counter >= patience:
@@ -285,7 +381,8 @@ def train_stage(
 
 def save_checkpoint(model, name, checkpoint_dir, log=None,
                     optimizer=None, scheduler=None, scaler=None,
-                    epoch=None, best_loss=None, stage_name=None):
+                    epoch=None, best_loss=None, stage_name=None,
+                    global_step=None):
     """保存模型 checkpoint，含训练状态以支持 resume。"""
     os.makedirs(checkpoint_dir, exist_ok=True)
     ckpt_path = os.path.join(checkpoint_dir, f"{name}.pth")
@@ -302,6 +399,8 @@ def save_checkpoint(model, name, checkpoint_dir, log=None,
         ckpt["best_loss"] = best_loss
     if stage_name is not None:
         ckpt["stage"] = stage_name
+    if global_step is not None:
+        ckpt["global_step"] = global_step
     torch.save(ckpt, ckpt_path)
     print(f"  💾 Checkpoint: {ckpt_path}")
     if log is not None:
@@ -328,28 +427,17 @@ def main():
     frozen_lm = FrozenLM(model_config.frozen_lm_name, device=device)
     model = DocumentTransformer(model_config, frozen_lm).to(device)
 
-    # Resume: 加载 checkpoint 权重
+    # Resume: 加载 checkpoint
     resume_stage = None
+    resume_ckpt = None
     if args.resume:
-        print(f"\n  🔄 Resuming from: {args.resume}")
+        print(f"\n  \U0001f504 Resuming from: {args.resume}")
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        if isinstance(ckpt, dict) and "model" in ckpt:
-            model.load_state_dict(ckpt["model"])
-            resume_stage = ckpt.get("stage", None)
-        else:
-            # 兼容旧格式 checkpoint（纯 state_dict）
-            model.load_state_dict(ckpt)
-        # 根据 checkpoint 名称推断所在 stage
-        if resume_stage is None:
-            basename = os.path.basename(args.resume)
-            if "stage1" in basename:
-                resume_stage = "stage1"
-            elif "stage2" in basename:
-                resume_stage = "stage2"
-            elif "stage3" in basename:
-                resume_stage = "stage3"
-        print(f"  ✅ Loaded. Resume from stage: {resume_stage or 'stage1'}")
-
+        model.load_state_dict(ckpt["model"])
+        resume_stage = ckpt.get("stage", None)
+        resume_ckpt = ckpt
+        print(f"  \u2705 Loaded. Stage={resume_stage}, epoch={ckpt.get('epoch', '?')}, "
+              f"best_loss={ckpt.get('best_loss', '?')}")
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
     print(f"Checkpoint dir: {train_config.checkpoint_dir}")
@@ -400,6 +488,7 @@ def main():
             model_config=model_config,
             writer=writer,
             global_step=global_step,
+            resume_ckpt=resume_ckpt if resume_stage == "stage1" else None,
         )
         save_checkpoint(model, "stage1_final", train_config.checkpoint_dir, log1)
         all_logs["stage1"] = log1
@@ -424,6 +513,7 @@ def main():
             model_config=model_config,
             writer=writer,
             global_step=global_step,
+            resume_ckpt=resume_ckpt if resume_stage == "stage2" else None,
         )
         save_checkpoint(model, "stage2_final", train_config.checkpoint_dir, log2)
         all_logs["stage2"] = log2
@@ -448,6 +538,7 @@ def main():
             model_config=model_config,
             writer=writer,
             global_step=global_step,
+            resume_ckpt=resume_ckpt if resume_stage == "stage3" else None,
         )
         save_checkpoint(model, "stage3_final", train_config.checkpoint_dir, log3)
         all_logs["stage3"] = log3
