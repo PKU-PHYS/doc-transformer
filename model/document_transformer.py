@@ -34,15 +34,25 @@ class DocumentTransformer(nn.Module):
         
         x_emb = torch.zeros((B, max_len, self.config.d_model), device=device)
         
-        # 嵌入阶段关闭 autocast：大量手动张量赋值与 BF16 不兼容，
-        # 且嵌入只占 <1% 算力。Transformer 主干仍在外层 autocast 下享受 BF16。
+        # 嵌入阶段关闭 autocast：手动张量赋值与 BF16 不兼容
         with torch.amp.autocast('cuda', enabled=False):
+            # 展平整个 batch 的 leaves，一次性通过 token_embedder
+            all_leaves = []
+            batch_offsets = []  # (batch_idx, start_in_flat, count)
             for b, leaves in enumerate(batched_leaves):
                 if leaves:
-                    embs = self.token_embedder(leaves, self.frozen_lm)
-                    x_emb[b, :len(leaves), :] = embs
+                    start = len(all_leaves)
+                    all_leaves.extend(leaves)
+                    batch_offsets.append((b, start, len(leaves)))
+            
+            if all_leaves:
+                # 单次调用处理全部 leaves（内部已按类型分组批量化）
+                all_embs = self.token_embedder(all_leaves, self.frozen_lm)
+                # scatter 回 (B, max_len, d_model)
+                for b, start, count in batch_offsets:
+                    x_emb[b, :count, :] = all_embs[start:start + count]
                 
-        # (B, max_len, d_model) — Transformer 主干在外层 autocast 下运行
+        # Transformer 主干在外层 autocast 下运行
         out = self.transformer(x_emb, padding_mask=padding_mask)
         return out
         

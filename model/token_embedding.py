@@ -53,48 +53,51 @@ class TokenEmbedding(nn.Module):
         if N == 0:
             return torch.zeros(0, self.d_model, device=device)
             
-        # 1. 准备 FrozenLM 需要计算的文本
-        # 包括值编码中的 string 和 路径编码中的 key
-        texts_to_encode = set()
+        # ── 第一步：收集所有需要 FrozenLM 编码的唯一文本 ──
+        all_unique_texts = set()
         str_values = []
         str_indices = []
         
         for i, leaf in enumerate(leaves):
             if leaf.value_type == "string":
-                texts_to_encode.add(leaf.value)
+                all_unique_texts.add(leaf.value)
                 str_values.append(leaf.value)
                 str_indices.append(i)
             for p in leaf.path:
-                texts_to_encode.add(p)
-                
-        # 批量使用 FrozenLM 获取文本特征
-        # 由于 FrozenLM 有 cache，重复出现的其实不会重复算
-        # 但我们为了给 ValueEncoder 传递 string 对应的值特征，需要显式算出 str_values 的
+                all_unique_texts.add(p)
+        
+        # 一次性编码所有唯一文本，构建查找表
+        if all_unique_texts:
+            unique_list = list(all_unique_texts)
+            unique_embs = frozen_lm.encode(unique_list)  # (K, lm_dim) — 单次调用
+            text_lookup = {t: unique_embs[j] for j, t in enumerate(unique_list)}
+        else:
+            text_lookup = {}
+
+        # ── 第二步：值编码 ──
         if str_values:
-            lm_value_embs = frozen_lm.encode(str_values) # (N_str, lm_dim)
+            lm_value_embs = torch.stack([text_lookup[s] for s in str_values])
         else:
             lm_value_embs = None
 
-        # --- 值编码 ---
         node_types = [l.value_type for l in leaves]
         raw_values = [l.value for l in leaves]
         val_embs = self.value_encoder(node_types, raw_values, lm_embeddings=lm_value_embs)
         
-        # --- 路径编码 ---
+        # ── 第三步：路径编码（通过查找表，不再逐叶子调用 encode） ──
+        lm_dim = frozen_lm.dim()
         path_embs_list = []
         for leaf in leaves:
             if not leaf.path:
-                path_embs_list.append(torch.zeros(0, self.frozen_lm_dim, device=device))
+                path_embs_list.append(torch.zeros(0, lm_dim, device=device))
             else:
-                # encode 会返回 (len(leaf.path), lm_dim)
-                p_emb = frozen_lm.encode(leaf.path)
-                path_embs_list.append(p_emb)
+                path_embs_list.append(torch.stack([text_lookup[p] for p in leaf.path]))
                 
         path_embs = self.path_encoder(path_embs_list) # (N, d_model)
         
-        # --- 组嵌入 ---
+        # ── 第四步：组嵌入 ──
         group_ids_list = [l.group_ids for l in leaves]
         group_embs = generate_group_embeddings(group_ids_list, self.d_model, self.group_scale, device=device)
         
-        # --- 最终求和 ---
+        # ── 最终求和 ──
         return val_embs + path_embs + group_embs

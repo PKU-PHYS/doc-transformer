@@ -15,6 +15,7 @@
 import os
 import time
 import json
+import argparse
 import torch
 import matplotlib
 matplotlib.use("Agg")  # 无头模式
@@ -262,20 +263,40 @@ def train_stage(
     return stage_log
 
 
-def save_checkpoint(model, name, checkpoint_dir, log=None):
-    """保存模型 checkpoint。"""
+def save_checkpoint(model, name, checkpoint_dir, log=None,
+                    optimizer=None, scheduler=None, scaler=None,
+                    epoch=None, best_loss=None, stage_name=None):
+    """保存模型 checkpoint，含训练状态以支持 resume。"""
     os.makedirs(checkpoint_dir, exist_ok=True)
     ckpt_path = os.path.join(checkpoint_dir, f"{name}.pth")
-    torch.save(model.state_dict(), ckpt_path)
+    ckpt = {"model": model.state_dict()}
+    if optimizer is not None:
+        ckpt["optimizer"] = optimizer.state_dict()
+    if scheduler is not None:
+        ckpt["scheduler"] = scheduler.state_dict()
+    if scaler is not None:
+        ckpt["scaler"] = scaler.state_dict()
+    if epoch is not None:
+        ckpt["epoch"] = epoch
+    if best_loss is not None:
+        ckpt["best_loss"] = best_loss
+    if stage_name is not None:
+        ckpt["stage"] = stage_name
+    torch.save(ckpt, ckpt_path)
     print(f"  💾 Checkpoint: {ckpt_path}")
-
     if log is not None:
         log_path = os.path.join(checkpoint_dir, f"{name}_log.json")
         with open(log_path, "w") as f:
             json.dump(log, f, indent=2)
+        print(f"  📄 Log: {log_path}")
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint .pth to resume from")
+    args = parser.parse_args()
+
     model_config = ModelConfig()
     train_config = TrainConfig()
 
@@ -287,68 +308,108 @@ def main():
     frozen_lm = FrozenLM(model_config.frozen_lm_name, device=device)
     model = DocumentTransformer(model_config, frozen_lm).to(device)
 
+    # Resume: 加载 checkpoint 权重
+    resume_stage = None
+    if args.resume:
+        print(f"\n  🔄 Resuming from: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            model.load_state_dict(ckpt["model"])
+            resume_stage = ckpt.get("stage", None)
+        else:
+            # 兼容旧格式 checkpoint（纯 state_dict）
+            model.load_state_dict(ckpt)
+        # 根据 checkpoint 名称推断所在 stage
+        if resume_stage is None:
+            basename = os.path.basename(args.resume)
+            if "stage1" in basename:
+                resume_stage = "stage1"
+            elif "stage2" in basename:
+                resume_stage = "stage2"
+            elif "stage3" in basename:
+                resume_stage = "stage3"
+        print(f"  ✅ Loaded. Resume from stage: {resume_stage or 'stage1'}")
+
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
     print(f"Checkpoint dir: {train_config.checkpoint_dir}")
 
     all_logs = {}
 
+    # 确定要跳过的 stages（resume 时从下一个 stage 开始）
+    skip_stages = set()
+    if resume_stage == "stage1":
+        # 从 stage1 checkpoint 恢复 → 重新跑 stage1（权重已加载）
+        pass
+    elif resume_stage == "stage2":
+        skip_stages.add("stage1")
+    elif resume_stage == "stage3":
+        skip_stages.add("stage1")
+        skip_stages.add("stage2")
+
     # ════════════════════════════════════════
     # Stage 1: 显式规则基础训练
     # ════════════════════════════════════════
-    log1 = train_stage(
-        model=model,
-        frozen_lm=frozen_lm,
-        stage_name="stage1_explicit",
-        train_mode="explicit",
-        max_epochs=train_config.stage1_max_epochs,
-        patience=train_config.stage1_patience,
-        dataset_size=train_config.dataset_size,
-        target_tokens=train_config.stage1_target_tokens,
-        distractor_level=train_config.stage1_distractor_level,
-        train_config=train_config,
-        model_config=model_config,
-    )
-    save_checkpoint(model, "stage1_final", train_config.checkpoint_dir, log1)
-    all_logs["stage1"] = log1
+    if "stage1" not in skip_stages:
+        log1 = train_stage(
+            model=model,
+            frozen_lm=frozen_lm,
+            stage_name="stage1_explicit",
+            train_mode="explicit",
+            max_epochs=train_config.stage1_max_epochs,
+            patience=train_config.stage1_patience,
+            dataset_size=train_config.dataset_size,
+            target_tokens=train_config.stage1_target_tokens,
+            distractor_level=train_config.stage1_distractor_level,
+            train_config=train_config,
+            model_config=model_config,
+        )
+        save_checkpoint(model, "stage1_final", train_config.checkpoint_dir, log1)
+        all_logs["stage1"] = log1
+    else:
+        print(f"\n  ⏭️  Skipping stage1 (resumed from {resume_stage})")
 
     # ════════════════════════════════════════
     # Stage 2: In-Context 上下文规则归纳
     # ════════════════════════════════════════
-    log2 = train_stage(
-        model=model,
-        frozen_lm=frozen_lm,
-        stage_name="stage2_in_context",
-        train_mode="in_context",
-        max_epochs=train_config.stage2_max_epochs,
-        patience=train_config.stage2_patience,
-        dataset_size=train_config.dataset_size,
-        target_tokens=train_config.stage2_target_tokens,
-        distractor_level=train_config.stage2_distractor_level,
-        train_config=train_config,
-        model_config=model_config,
-    )
-    save_checkpoint(model, "stage2_final", train_config.checkpoint_dir, log2)
-    all_logs["stage2"] = log2
+    if "stage2" not in skip_stages:
+        log2 = train_stage(
+            model=model,
+            frozen_lm=frozen_lm,
+            stage_name="stage2_in_context",
+            train_mode="in_context",
+            max_epochs=train_config.stage2_max_epochs,
+            patience=train_config.stage2_patience,
+            dataset_size=train_config.dataset_size,
+            target_tokens=train_config.stage2_target_tokens,
+            distractor_level=train_config.stage2_distractor_level,
+            train_config=train_config,
+            model_config=model_config,
+        )
+        save_checkpoint(model, "stage2_final", train_config.checkpoint_dir, log2)
+        all_logs["stage2"] = log2
+    else:
+        print(f"\n  ⏭️  Skipping stage2 (resumed from {resume_stage})")
 
     # ════════════════════════════════════════
     # Stage 3: 混合鲁棒性训练
     # ════════════════════════════════════════
-    log3 = train_stage(
-        model=model,
-        frozen_lm=frozen_lm,
-        stage_name="stage3_mixed",
-        train_mode="mixed",
-        max_epochs=train_config.stage3_max_epochs,
-        patience=train_config.stage3_patience,
-        dataset_size=train_config.dataset_size,
-        target_tokens=train_config.stage3_target_tokens,
-        distractor_level=train_config.stage3_distractor_level,
-        train_config=train_config,
-        model_config=model_config,
-    )
-    save_checkpoint(model, "stage3_final", train_config.checkpoint_dir, log3)
-    all_logs["stage3"] = log3
+    if "stage3" not in skip_stages:
+        log3 = train_stage(
+            model=model,
+            frozen_lm=frozen_lm,
+            stage_name="stage3_mixed",
+            train_mode="mixed",
+            max_epochs=train_config.stage3_max_epochs,
+            patience=train_config.stage3_patience,
+            dataset_size=train_config.dataset_size,
+            target_tokens=train_config.stage3_target_tokens,
+            distractor_level=train_config.stage3_distractor_level,
+            train_config=train_config,
+            model_config=model_config,
+        )
+        save_checkpoint(model, "stage3_final", train_config.checkpoint_dir, log3)
+        all_logs["stage3"] = log3
 
     # ════════════════════════════════════════
     # 保存完整日志 + 绘制 Loss 曲线
