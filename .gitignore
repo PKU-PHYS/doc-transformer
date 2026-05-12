@@ -6,4 +6,4 @@ pixi.lock
 checkpoints/
 *.pt
 *.pth
-.pytest_cache/
+.pytest_cache/runs/

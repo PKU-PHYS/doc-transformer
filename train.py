@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from torch.optim import AdamW
 from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from config import ModelConfig, TrainConfig
 from model.frozen_lm import FrozenLM
@@ -107,6 +108,8 @@ def train_stage(
     distractor_level: int,
     train_config: TrainConfig,
     model_config: ModelConfig,
+    writer: SummaryWriter = None,
+    global_step: int = 0,
     checkpoint_interval: int = 5,
 ) -> dict:
     """
@@ -195,13 +198,20 @@ def train_stage(
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
 
             batch_loss = loss.item()
             epoch_loss += batch_loss
             n_batches += 1
+            global_step += 1
+
+            # ── TensorBoard: per-step metrics ──
+            if writer is not None:
+                writer.add_scalar(f"{stage_name}/batch_loss", batch_loss, global_step)
+                writer.add_scalar(f"{stage_name}/lr", optimizer.param_groups[0]["lr"], global_step)
+                writer.add_scalar(f"{stage_name}/grad_norm", grad_norm.item(), global_step)
 
             if batch_idx % 50 == 0:
                 avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
@@ -241,6 +251,16 @@ def train_stage(
               f"Time={epoch_time:.1f}s"
               f"{mem_info}")
 
+        # ── TensorBoard: per-epoch metrics ──
+        if writer is not None:
+            writer.add_scalar(f"{stage_name}/epoch_avg_loss", avg_loss, epoch + 1)
+            writer.add_scalar(f"{stage_name}/epoch_time", epoch_time, epoch + 1)
+            writer.add_scalar(f"{stage_name}/best_loss", best_loss, epoch + 1)
+            if device == "cuda":
+                writer.add_scalar(f"{stage_name}/gpu_mem_GiB", mem_alloc, epoch + 1)
+                writer.add_scalar(f"{stage_name}/gpu_peak_GiB", mem_peak, epoch + 1)
+            writer.flush()
+
         # ── 定期保存 checkpoint ──
         if (epoch + 1) % checkpoint_interval == 0:
             save_checkpoint(model, f"{stage_name}_e{epoch+1}",
@@ -260,7 +280,7 @@ def train_stage(
     stage_log["best_loss"] = best_loss
     stage_log["stopped_at_epoch"] = epoch + 1
 
-    return stage_log
+    return stage_log, global_step
 
 
 def save_checkpoint(model, name, checkpoint_dir, log=None,
@@ -334,7 +354,22 @@ def main():
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
     print(f"Checkpoint dir: {train_config.checkpoint_dir}")
 
+    # ── TensorBoard ──
+    run_name = time.strftime("%Y%m%d_%H%M%S")
+    if args.resume:
+        run_name += "_resumed"
+    writer = SummaryWriter(log_dir=os.path.join("runs", run_name))
+    print(f"  📊 TensorBoard: runs/{run_name}")
+    print(f"     Launch: tensorboard --logdir runs/")
+
+    # 记录超参数
+    writer.add_text("config/model", f"d={model_config.d_model}, L={model_config.n_layers}, "
+                     f"H={model_config.n_heads}, ff={model_config.d_ff}")
+    writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
+                     f"beta2=0.95, bf16=True")
+
     all_logs = {}
+    global_step = 0
 
     # 确定要跳过的 stages（resume 时从下一个 stage 开始）
     skip_stages = set()
@@ -351,7 +386,7 @@ def main():
     # Stage 1: 显式规则基础训练
     # ════════════════════════════════════════
     if "stage1" not in skip_stages:
-        log1 = train_stage(
+        log1, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
             stage_name="stage1_explicit",
@@ -363,6 +398,8 @@ def main():
             distractor_level=train_config.stage1_distractor_level,
             train_config=train_config,
             model_config=model_config,
+            writer=writer,
+            global_step=global_step,
         )
         save_checkpoint(model, "stage1_final", train_config.checkpoint_dir, log1)
         all_logs["stage1"] = log1
@@ -373,7 +410,7 @@ def main():
     # Stage 2: In-Context 上下文规则归纳
     # ════════════════════════════════════════
     if "stage2" not in skip_stages:
-        log2 = train_stage(
+        log2, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
             stage_name="stage2_in_context",
@@ -385,6 +422,8 @@ def main():
             distractor_level=train_config.stage2_distractor_level,
             train_config=train_config,
             model_config=model_config,
+            writer=writer,
+            global_step=global_step,
         )
         save_checkpoint(model, "stage2_final", train_config.checkpoint_dir, log2)
         all_logs["stage2"] = log2
@@ -395,7 +434,7 @@ def main():
     # Stage 3: 混合鲁棒性训练
     # ════════════════════════════════════════
     if "stage3" not in skip_stages:
-        log3 = train_stage(
+        log3, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
             stage_name="stage3_mixed",
@@ -407,6 +446,8 @@ def main():
             distractor_level=train_config.stage3_distractor_level,
             train_config=train_config,
             model_config=model_config,
+            writer=writer,
+            global_step=global_step,
         )
         save_checkpoint(model, "stage3_final", train_config.checkpoint_dir, log3)
         all_logs["stage3"] = log3
@@ -431,6 +472,8 @@ def main():
               f"best_loss={log['best_loss']:.6f} | "
               f"{log['reason']}")
     print(f"{'='*70}\n")
+
+    writer.close()
 
 
 if __name__ == "__main__":
