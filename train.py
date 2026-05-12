@@ -435,6 +435,13 @@ def main():
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
         resume_stage = ckpt.get("stage", None)
+        # 统一为短名: "stage1_explicit" → "stage1"
+        if resume_stage and "stage1" in resume_stage:
+            resume_stage = "stage1"
+        elif resume_stage and "stage2" in resume_stage:
+            resume_stage = "stage2"
+        elif resume_stage and "stage3" in resume_stage:
+            resume_stage = "stage3"
         resume_ckpt = ckpt
         print(f"  \u2705 Loaded. Stage={resume_stage}, epoch={ckpt.get('epoch', '?')}, "
               f"best_loss={ckpt.get('best_loss', '?')}")
