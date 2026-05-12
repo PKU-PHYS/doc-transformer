@@ -225,10 +225,10 @@ from dataclasses import dataclass
 
 @dataclass
 class ModelConfig:
-    d_model: int = 256          # 核心隐藏维度
-    n_layers: int = 6           # Transformer 编码器层数
-    n_heads: int = 8            # 注意力头数 (每个头 32 维)
-    d_ff: int = 1024            # FFN 中间层维度
+    d_model: int = 1536         # XXXL: 核心隐藏维度
+    n_layers: int = 16          # XXXL: Transformer 编码器层数
+    n_heads: int = 16           # XXXL: 注意力头数 (每个头 96 维)
+    d_ff: int = 6144            # XXXL: FFN 中间层维度
     dropout: float = 0.1
     max_depth: int = 10         # Depth Embedding 方案的最大深度支持
     max_tokens: int = 512       # 截断阈值，单样本最大 token 数
@@ -245,15 +245,34 @@ class ModelConfig:
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
     
     # 组嵌入缩放
-    group_scale: float = 1.0    # 随机向量 L2 归一化后的模长
+    group_scale: float = 0.1    # 随机向量 L2 归一化后的模长 (降低以平衡 val/path 量级)
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 32        # RTX 4000 24GB 显存充裕
+    batch_size: int = 16        # XXXL @ 512 tokens: 实测峰值 ~11-21G / 23.4G
     lr: float = 1e-4            # AdamW 学习率
-    epochs: int = 100
     mask_ratio: float = 0.15    # 自监督掩码比例
     device: str = "cuda"
+    
+    # 课程学习配置 — 每阶段: max_epochs (上限) + patience (收敛判定)
+    stage1_max_epochs: int = 50     
+    stage1_patience: int = 8        
+    stage2_max_epochs: int = 80     
+    stage2_patience: int = 10       
+    stage3_max_epochs: int = 40     
+    stage3_patience: int = 8        
+    
+    dataset_size: int = 10000   # 每个 epoch 的样本数 (464M 模型需要足够数据)
+    
+    stage1_target_tokens: int = 100   
+    stage2_target_tokens: int = 300   
+    stage3_target_tokens: int = 200   
+    
+    stage1_distractor_level: int = 1  
+    stage2_distractor_level: int = 2  
+    stage3_distractor_level: int = 3  
+    
+    checkpoint_dir: str = "checkpoints"
 ```
 
 ### 5.1 模型长度限制与截断策略说明
@@ -316,9 +335,13 @@ class JSONParser:
 我们的合成数据不再只是简单的材料字典，而是包含了多类数学函数、推理任务和大量随机模板生成的丰富数据：
 
 **生成流程核心组件**：
-1. **FunctionRegistry / TextTaskGenerator**: 随机采样一条带有真实数学关系（如三角函数、代数等）或文本推理（如词汇属性）的任务数据（MathRelation / Task）。
-2. **TemplateEngine**: 从超过 100 种 JSON 结构模板（扁平、嵌套、数组、链式等）中随机选取一个，将 MathRelation 渲染成具有千变万化键名和树状结构的 JSON 字典。
-3. **Distractor Injector**: 随机向生成的 JSON 中插入完全无关的“干扰字段”（如 `id`, `timestamp`, `author`, `confidence` 等），强迫模型学会选择性忽略噪声。
+1. **FunctionRegistry / TextTaskGenerator**：随机采样数学关系或文本推理任务。其中，纯文本推理任务 (`TextTaskGenerator`) 并非简单的占位符，而是被精心设计为**三大类跨模态桥接任务**：
+   - **数值 → 文本分类** (如根据数值大小判断 magnitude、正负号、象限)
+   - **文本 → 文本推理** (如输出反函数名称、计算导数表达式配对)
+   - **文本 → 数值检索** (如基于自然语言“archimedes_constant”输出 $3.141593$)
+   这三类任务直接强制模型将 FrozenLM 的语义向量空间与傅里叶特征的高维数值空间进行深度对齐。
+2. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它不仅囊括了 5 大类（扁平、嵌套、数组、复合链式等）逾百种模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**，如全随机打乱字典键的顺序 (`_shuffle_dict`) 或概率性展平单层嵌套，极大化结构多样性，彻底破坏模型对固定 JSON 格式产生“位置捷径过拟合”的可能。
+3. **Distractor Injector**：随机向生成的 JSON 中插入完全无关的干扰分支（如 `timestamp`, `confidence` 等），迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点。
 
 **数据流伪代码**：
 ```python
@@ -350,7 +373,7 @@ def __getitem__(self, idx):
 
 ## 七、网络模块伪代码
 
-所有的嵌入模块最终都要将输入映射到 `d_model` (256维) 空间。
+所有的嵌入模块最终都要将输入映射到 `d_model` 维空间。
 
 ### 7.1 值编码器 (`model/value_encoder.py`)
 
@@ -410,6 +433,11 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 - **布尔型预测**：使用 `BCEWithLogitsLoss`。
 - **文本型预测**：投影到 384 维后，使用 InfoNCE 或 Cosine Embedding Loss 对齐 `FrozenLM(target_text)`。
 
+### 7.4 Token 嵌入引擎的全局去重与缓存优化 (Global Deduplication & Caching)
+为打破 `FrozenLM` 处理大规模深层 JSON 时带来的推理瓶颈（即同一 Batch 的不同节点内大量重复出现如 `"materials"`, `"formula"` 等短语），底层网络引入了两项超前性能优化：
+1. **Batch 级全局词表去重 (Global Token Lookup)**：在每次前向传播的起始阶段 (`TokenEmbedding`)，引擎会主动提取当前 Batch 内所有叶子的字符串值和路径节点，放入 `set` 统一去重。提取出的独一无二的词汇表会被“一次性”送入语言模型，并建立 `text_lookup` 哈希表供后续路径编码和值编码查询，将庞大 Batch 下的大量冗余文本推理开销瞬间清零。
+2. **跨步内存级缓存与防爆机制 (Eviction Policy)**：`FrozenLM` 内部封装了带状态的字典缓存 (`self._cache`)，使跨 Batch 间频繁出现的高频键名永远只需编码一次。同时加入了**自动驱逐清洗机制** (`if len(self._cache) > 10000: self._cache.clear()`)，完美杜绝了持续数万个 Epoch 的海量生僻随机词采样可能引发的 GPU 显存泄漏 (OOM) 崩溃问题。
+
 ---
 
 ## 八、训练策略与课程学习 (Curriculum Learning)
@@ -464,10 +492,16 @@ def generate_in_context_task(num_shots=3):
 
 为保障大模型训练稳定性，实现中必须包含以下防线：
 1. **Step 级学习率预热 (Warmup)**：绝对禁止大模型直接以 `1e-4` 等高学习率冷启动。必须分配一定比例（如 5%）的训练步数用于线性预热（`get_cosine_schedule_with_warmup`），并将 `scheduler.step()` 移至每个 Batch 结束后执行，实现细粒度平滑过渡。
-2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重必须用极小的方差（如 `std=0.001`）初始化，偏置设为 `0.0`。这迫使大模型在训练初期的盲目猜测阶段输出接近 `0` 的保守数值，避免巨大误差带来的毁灭性梯度惩罚，为主干网络争取建立注意力几何的时间。
+2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重必须用极小的方差（如 `std=0.001`）初始化，偏置设为 `0.0`。这迫使大模型在训练初期的盲目猜测阶段输出接近 `0` 的保守数值，避免巨大误差带来的毁灭性梯度惩罚，为主干网络争取建立注意力几何的时间。此外，为全面保障各类目标的预测稳定性，布尔分类头 (`bool_head`) 和文本匹配头 (`text_head`) 的权重也应当应用较小的方差（如 `std=0.01`）进行初始化约束。
 3. **消除傅里叶特征的高频混叠**：如果 `freqs` 采用默认的正态分布初始化，模型只能捕获频率 1.0 附近的特征。当遇到物理公式中产生的巨大目标数值（如 `10000`）时，正弦波会发生严重的混叠（aliasing）与高频噪音。必须将 `freqs` 初始化为跨越多个量级的对数均匀分布（如 $10^{-4}$ 到 $10^1$），以确保模型能感知大数值的宏观差异。
 4. **防止组嵌入（Group Embedding）方差坍缩**：为求内积稳定，强行将高维向量的 L2 范数归一化为 1.0 会导致其内部元素的方差坍缩至 $1/d_{model}$（接近 0）。能量过弱会使 Transformer 完全忽视结构组嵌入，导致数组内原本不同的元素无法被有效区分。必须在归一化后乘以 $\sqrt{d_{model}}$，将方差恢复至正常的 `1.0` 尺度。
 5. **嵌入层独立归一化 (Embedding LayerNorm)**：当主干 Transformer 使用 `norm_first=True` (Pre-LN) 时，第一层的 LayerNorm 是作用在注意力的分支上，而残差主干（Residual Stream）在初始阶段未受任何归一化约束。由于最终的 Token 嵌入是值、路径、组嵌入之和，存在极大的初始方差累积。必须在传入 `TransformerEncoder` 前额外应用一个全局的 `nn.LayerNorm(d_model)`，彻底截断残差流初始的巨大方差膨胀，避免损失爆炸。
+
+### 8.5 自动化课程学习调度与工程化加速
+为保障三阶段课程学习连续平稳进行并极大化利用硬件算力，训练入口 (`train.py`) 需要部署以下工程组件：
+1. **基于 Patience 的自动阶段流转**：摒弃单一的 `epochs` 设置。为每个阶段设置独立的目标词元长度 (`target_tokens`) 和干扰强度 (`distractor_level`)。利用 `patience` 机制监控阶段收敛，当验证 Loss 连续 `patience` 轮不再改善时，自动保存模型并无缝切换至下一阶段（例如从 Stage 1 进入 Stage 2），极大减少人工干预。
+2. **混合精度训练 (BF16 AMP)**：当模型攀升至数亿参数，应当结合 `torch.amp.autocast('cuda', dtype=torch.bfloat16)` 与 `GradScaler`。BFloat16 保留了与 FP32 相同的指数位，既有效杜绝了大规模数值计算时的下溢出，又能大幅降低显存开销并带来近 2 倍的吞吐量提升。
+3. **多维指标监控与诊断**：引入 TensorBoard 实时记录各阶段的训练动态（Loss, 学习率, GPU显存/峰值利用率）。不仅要求记录 Loss，还必须在每个阶段内定期提取真实样本（如每 200 个 batch）展示其输入、预测值与真实值的文本对照 (`_log_sample_case`)，并在全部阶段完结后自动绘制跨阶段的 Loss 曲线图像供后续归纳总结。
 
 ---
 
