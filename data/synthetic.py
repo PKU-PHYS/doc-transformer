@@ -346,18 +346,32 @@ class SyntheticDataset(Dataset):
             leaves = leaves[:self.max_tokens]
 
         target_masks = {}
-        # 优先 mask 数值节点（有数学关系可学），再补充其他类型
+        # 优先 mask 输出变量（最后一个数值节点），保证被 mask 的值总是可从其余变量唯一确定。
+        # 在所有生成器中，输出变量总是 variables dict 的最后一个 key，
+        # flat_basic 模板保持此顺序，因此 parse 后最后一个数值叶子 = 输出变量。
+        # 避免 mask 不可逆函数（max/min/abs/sign）的输入，消除不可确定的训练噪声。
         num_masks = max(1, int(len(leaves) * self.mask_ratio))
         num_indices = [i for i, l in enumerate(leaves) if l.value_type == "number"]
         other_indices = [i for i, l in enumerate(leaves) if l.value_type != "number"]
-        # 优先选数值，不够再从其他类型补
-        if len(num_indices) >= num_masks:
-            mask_indices = random.sample(num_indices, num_masks)
+        
+        if num_indices:
+            # 输出变量 = 最后一个数值叶子，优先 mask
+            output_idx = num_indices[-1]
+            mask_indices = [output_idx]
+            
+            # 如果还需要更多 mask，从其余数值节点中选
+            if num_masks > 1:
+                remaining_num = [i for i in num_indices if i != output_idx]
+                extra_needed = num_masks - 1
+                if remaining_num and extra_needed > 0:
+                    mask_indices += random.sample(remaining_num, min(extra_needed, len(remaining_num)))
+                    extra_needed = num_masks - len(mask_indices)
+                # 仍不够，从非数值节点补
+                if other_indices and extra_needed > 0:
+                    mask_indices += random.sample(other_indices, min(extra_needed, len(other_indices)))
         else:
-            mask_indices = list(num_indices)
-            remaining = num_masks - len(mask_indices)
-            if other_indices and remaining > 0:
-                mask_indices += random.sample(other_indices, min(remaining, len(other_indices)))
+            # 没有数值节点，从其他类型选
+            mask_indices = random.sample(other_indices, min(num_masks, len(other_indices))) if other_indices else []
 
         for i in mask_indices:
             orig_node = leaves[i]

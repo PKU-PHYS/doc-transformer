@@ -249,7 +249,7 @@ def train_stage(
     # 预估总步数和 Warmup 步数
     steps_per_epoch = dataset_size // train_config.batch_size
     total_steps = max_epochs * steps_per_epoch
-    warmup_steps = int(total_steps * 0.05) # 5% 的 warmup
+    warmup_steps = min(625, total_steps // 10)  # 固定 1 epoch warmup，不随 max_epochs 膨胀
     
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, 
@@ -271,11 +271,6 @@ def train_stage(
     if resume_ckpt is not None:
         if "optimizer" in resume_ckpt:
             optimizer.load_state_dict(resume_ckpt["optimizer"])
-        if "scheduler" in resume_ckpt:
-            # 注意: 不恢复 scheduler state_dict，让新的 max_epochs 生效
-            # 旧的 state_dict 中 T_max 等参数可能与新配置不匹配
-            # scheduler 会以当前 epoch 对应的 step 重新计算 LR
-            pass
         if "scaler" in resume_ckpt:
             scaler.load_state_dict(resume_ckpt["scaler"])
         if "epoch" in resume_ckpt:
@@ -284,7 +279,14 @@ def train_stage(
             best_loss = resume_ckpt["best_loss"]
         if "global_step" in resume_ckpt:
             global_step = resume_ckpt["global_step"]
-        print(f"  \U0001f504 Resumed: epoch={start_epoch}, best_loss={best_loss:.6f}, global_step={global_step}")
+        
+        # 快进 scheduler 到恢复点对应的 step，保持 LR 轨迹连续
+        resume_steps = start_epoch * steps_per_epoch
+        for _ in range(resume_steps):
+            scheduler.step()
+        resumed_lr = optimizer.param_groups[0]["lr"]
+        print(f"  🔄 Resumed: epoch={start_epoch}, best_loss={best_loss:.6f}, "
+              f"global_step={global_step}, lr={resumed_lr:.2e}")
 
     stage_log = {
         "stage": stage_name,
