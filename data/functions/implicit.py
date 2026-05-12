@@ -29,7 +29,7 @@ def _register_implicit(name, synonyms, category, var_defs, satisfy):
         # 过滤无穷/NaN/极端值
         retry = False
         for v in vars_dict.values():
-            if not math.isfinite(v) or abs(v) > 10000.0:
+            if not math.isfinite(v) or abs(v) > 2**32:
                 retry = True
                 break
         if retry:

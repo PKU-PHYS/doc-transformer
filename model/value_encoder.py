@@ -1,26 +1,6 @@
-import math
 import torch
 import torch.nn as nn
 from torch import Tensor
-
-
-def _decompose_scientific(x: float) -> tuple[float, int]:
-    """
-    将实数分解为科学计数法: x = M × 10^E
-    
-    尾数 M ∈ [1, 10) (正数) 或 (-10, -1] (负数)，x=0 时 M=0。
-    指数 E 为整数。
-    
-    这是数值编码的核心：
-      - E 决定量级（天文数字 vs 量子级），用 Embedding 查表
-      - M 决定精度（天然归一化在 [-10, 10]），用傅里叶特征映射
-    """
-    if x == 0.0:
-        return 0.0, 0
-    abs_x = abs(x)
-    E = int(math.floor(math.log10(abs_x)))
-    M = x / (10.0 ** E)
-    return M, E
 
 
 class FourierFeatureEncoder(nn.Module):
@@ -28,18 +8,17 @@ class FourierFeatureEncoder(nn.Module):
     傅里叶特征映射，消除标准 MLP 的谱偏见。
     将一维标量展开为高频正余弦特征，然后再投影回 d_model。
     
-    在 Mantissa-Exponent 架构中，此编码器仅处理尾数 M ∈ [-10, 10]，
-    不再需要覆盖 0.001 ~ 10000 的跨量级范围。
+    在 Base-2 Mantissa-Exponent 架构中，此编码器仅处理尾数 M ∈ [-1, 1]（由 torch.frexp 产生）。
     """
     def __init__(self, n_feats: int, d_model: int, learnable: bool = True):
         super().__init__()
         if learnable:
-            # 使用对数均匀分布初始化频率，覆盖从宏观趋势 (1e-4) 到微观细节 (1e1)
-            freqs = 10.0 ** torch.empty(n_feats).uniform_(-4, 1)
+            # 对数均匀分布初始化频率，为 M ∈ [-1, 1] 优化
+            # [0.1, 100]: 最低频率捕捉宏观趋势，最高频率区分 0.50 和 0.51 的微小差异
+            freqs = 10.0 ** torch.empty(n_feats).uniform_(-1, 2)
             self.freqs = nn.Parameter(freqs) 
         else:
-            # 固定的几何级数频率：从很小的频率开始
-            freqs = 10.0 ** torch.linspace(-4, 1, n_feats)
+            freqs = 10.0 ** torch.linspace(-1, 2, n_feats)
             self.register_buffer('freqs', freqs)
             
         self.proj = nn.Linear(2 * n_feats, d_model)
@@ -56,16 +35,17 @@ class ValueEncoder(nn.Module):
     统一的值编码器入口。
     根据叶子节点的类型调用不同的子编码器。
     
-    数值编码采用 Mantissa-Exponent Split (xVal 机制)：
-      x = M × 10^E
-      V_num = FusionLinear( Fourier(M) + Embedding(E) )
+    数值编码采用 Base-2 Mantissa-Exponent Split (xVal 机制)：
+      x = M × 2^E  (通过 torch.frexp 在 O(1) 时间分解)
+      M ∈ [0.5, 1.0) 或 (-1.0, -0.5]，x=0 时 M=0
+      V_num = Fourier(M) + Embedding(E)
     """
     def __init__(self, d_model: int, frozen_lm_dim: int, n_fourier_feats: int, fourier_learnable: bool,
                  n_exponent_bins: int = 100, exponent_offset: int = 50):
         super().__init__()
         
-        # ── 数值型编码：科学计数法解构 ──
-        # 尾数编码器（傅里叶特征，M ∈ [-10, 10] 天然归一化）
+        # ── 数值型编码：Base-2 科学计数法解构 ──
+        # 尾数编码器（傅里叶特征，M ∈ [-1, 1] 天然归一化）
         self.mantissa_encoder = FourierFeatureEncoder(
             n_feats=n_fourier_feats, 
             d_model=d_model, 
@@ -123,18 +103,12 @@ class ValueEncoder(nn.Module):
             else:
                 raise ValueError(f"Unknown value type: {t}")
                 
-        # ── 数值型：科学计数法解构编码 ──
+        # ── 数值型：Base-2 torch.frexp 向量化编码 ──
         if num_indices:
-            mantissas = []
-            exponents = []
-            for v in num_vals:
-                m, e = _decompose_scientific(v)
-                mantissas.append(m)
-                exponents.append(e)
-            
-            m_tensor = torch.tensor(mantissas, dtype=torch.float32, device=device)
-            e_tensor = torch.tensor(exponents, dtype=torch.long, device=device)
-            # 将指数映射到嵌入表索引范围内，并安全 clamp
+            raw = torch.tensor(num_vals, dtype=torch.float32, device=device)
+            m_tensor, e_tensor = torch.frexp(raw)
+            # m_tensor ∈ [0.5, 1.0) 或 (-1.0, -0.5]，x=0 时 m=0
+            # e_tensor 为整数指数，x = m * 2^e
             e_indices = (e_tensor + self.exponent_offset).clamp(0, self.n_exponent_bins - 1)
             
             m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数

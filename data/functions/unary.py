@@ -29,18 +29,18 @@ make_unary_generator("atanh", ["atanh", "arctanh", "inverse_hyperbolic_tangent"]
 make_unary_generator("exp", ["exp", "exponential", "e_to_the", "natural_exp"], "exponential", math.exp, (-5, 5), tier=0)
 make_unary_generator("exp2", ["exp2", "two_to_the", "power_of_2", "2_exp"], "exponential", lambda x: 2.0 ** x, (-10, 10), tier=0)
 make_unary_generator("expm1", ["expm1", "exp_minus_1", "e_x_minus_1"], "exponential", math.expm1, (-5, 5))
-make_unary_generator("log", ["log", "ln", "natural_log", "logarithm", "nat_log"], "logarithmic", math.log, (0.01, 100), tier=0)
-make_unary_generator("log2", ["log2", "log_base_2", "binary_log", "lb"], "logarithmic", math.log2, (0.01, 100), tier=0)
-make_unary_generator("log10", ["log10", "log_base_10", "common_log", "lg", "decadic_log"], "logarithmic", math.log10, (0.01, 100), tier=0)
+make_unary_generator("log", ["log", "ln", "natural_log", "logarithm", "nat_log"], "logarithmic", math.log, (1e-6, 1e6), tier=0, log_uniform=True)
+make_unary_generator("log2", ["log2", "log_base_2", "binary_log", "lb"], "logarithmic", math.log2, (1e-6, 1e6), tier=0, log_uniform=True)
+make_unary_generator("log10", ["log10", "log_base_10", "common_log", "lg", "decadic_log"], "logarithmic", math.log10, (1e-6, 1e6), tier=0, log_uniform=True)
 make_unary_generator("log1p", ["log1p", "log_1_plus_x", "ln_1_plus"], "logarithmic", math.log1p, (-0.99, 100))
 
 # ─────────────── 幂次 ───────────────
 
-make_unary_generator("sqrt", ["sqrt", "square_root", "root", "radical"], "power", math.sqrt, (0, 100), tier=0)
+make_unary_generator("sqrt", ["sqrt", "square_root", "root", "radical"], "power", math.sqrt, (0, 1e8), tier=0, log_uniform=True)
 make_unary_generator("cbrt", ["cbrt", "cube_root", "cubic_root", "third_root"], "power", lambda x: math.copysign(abs(x) ** (1/3), x), (-50, 50))
-make_unary_generator("square", ["square", "x_squared", "pow2", "quadratic_mono"], "power", lambda x: x * x, (-10, 10), tier=0)
+make_unary_generator("square", ["square", "x_squared", "pow2", "quadratic_mono"], "power", lambda x: x * x, (-1e4, 1e4), tier=0, log_uniform=True)
 make_unary_generator("cube", ["cube", "x_cubed", "pow3", "cubic_mono"], "power", lambda x: x * x * x, (-5, 5), tier=0)
-make_unary_generator("reciprocal", ["reciprocal", "inverse", "one_over_x", "multiplicative_inverse"], "power", lambda x: 1.0 / x, (0.1, 10))
+make_unary_generator("reciprocal", ["reciprocal", "inverse", "one_over_x", "multiplicative_inverse"], "power", lambda x: 1.0 / x, (1e-4, 1e4), log_uniform=True)
 
 # ─────────────── 激活 / 符号 ───────────────
 

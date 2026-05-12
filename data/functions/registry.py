@@ -122,7 +122,40 @@ CATEGORY_KEYS = [
 # 工厂函数
 # ─────────────────────────────────────────────
 
-def _safe_compute(compute_fn, x, max_abs=10000.0):
+def _sample_log_uniform(lo: float, hi: float) -> float:
+    """
+    在 [lo, hi] 范围内进行对数均匀采样，等概率覆盖每个量级。
+    仅适用于 lo > 0 的正数域。
+    """
+    log_lo = math.log(lo)
+    log_hi = math.log(hi)
+    return math.exp(random.uniform(log_lo, log_hi))
+
+
+def _sample_domain(lo: float, hi: float, log_uniform: bool = False) -> float:
+    """
+    统一的域采样入口。
+    log_uniform=True 时：
+      - 若 lo > 0: 对数均匀采样
+      - 若 hi < 0: 对数均匀采样后取负
+      - 若跨零: 先随机选符号，再对数均匀采样绝对值
+    """
+    if not log_uniform:
+        return random.uniform(lo, hi)
+    
+    if lo > 0:
+        return _sample_log_uniform(lo, hi)
+    elif hi < 0:
+        return -_sample_log_uniform(-hi, -lo)
+    else:
+        # 跨零域：先选符号，再采样绝对值
+        abs_lo = max(abs(lo), 1e-10)
+        abs_hi = max(abs(hi), 1e-10)
+        sign = random.choice([-1, 1])
+        return sign * _sample_log_uniform(min(abs_lo, abs_hi), max(abs_lo, abs_hi))
+
+
+def _safe_compute(compute_fn, x, max_abs=2**32):
     """安全计算，捕获 domain error 并拒绝过大的值。"""
     try:
         y = compute_fn(x)
@@ -145,6 +178,7 @@ def make_unary_generator(
     output_keys: Optional[List[str]] = None,
     max_retries: int = 20,
     tier: int = 1,
+    log_uniform: bool = False,
 ) -> Callable[[], MathRelation]:
     """为单变量函数创建并注册数据生成器。"""
     _in_keys = input_keys or UNARY_INPUT_KEYS
@@ -152,7 +186,7 @@ def make_unary_generator(
 
     def generator() -> MathRelation:
         for _ in range(max_retries):
-            x = random.uniform(*domain)
+            x = _sample_domain(*domain, log_uniform=log_uniform)
             y = _safe_compute(compute, x)
             if y is not None:
                 rel = MathRelation(
@@ -193,6 +227,7 @@ def make_binary_generator(
     output_keys: Optional[List[str]] = None,
     max_retries: int = 20,
     tier: int = 1,
+    log_uniform: bool = False,
 ) -> Callable[[], MathRelation]:
     """为双变量函数创建并注册数据生成器。"""
     _a_keys = input_a_keys or BINARY_INPUT_A_KEYS
@@ -201,8 +236,8 @@ def make_binary_generator(
 
     def generator() -> MathRelation:
         for _ in range(max_retries):
-            a = random.uniform(*domain_a)
-            b = random.uniform(*domain_b)
+            a = _sample_domain(*domain_a, log_uniform=log_uniform)
+            b = _sample_domain(*domain_b, log_uniform=log_uniform)
             y = _safe_compute(lambda _: compute(a, b), None)
             if y is not None:
                 return MathRelation(
