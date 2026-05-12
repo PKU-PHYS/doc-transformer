@@ -75,8 +75,6 @@ class ValueEncoder(nn.Module):
         self.exponent_embed = nn.Embedding(n_exponent_bins, d_model)
         self.n_exponent_bins = n_exponent_bins
         self.exponent_offset = exponent_offset
-        # 融合投影层
-        self.num_fusion = nn.Linear(d_model, d_model)
         
         # 文本型编码：先用 FrozenLM 得到特征，这里再做线性投影
         self.text_proj = nn.Linear(frozen_lm_dim, d_model)
@@ -141,7 +139,7 @@ class ValueEncoder(nn.Module):
             
             m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数
             e_emb = self.exponent_embed(e_indices)     # (N_num, d_model) — 查表获取量级
-            out[num_indices] = self.num_fusion(m_emb + e_emb)  # 融合
+            out[num_indices] = m_emb + e_emb  # 直接相加，与 pos+token embedding 范式一致
             
         if str_indices:
             if lm_embeddings is None:
