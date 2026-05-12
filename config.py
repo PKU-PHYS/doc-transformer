@@ -37,14 +37,14 @@ class TrainConfig:
     
     # 课程学习配置 — 每阶段: max_epochs (上限) + patience (收敛判定)
     # 当连续 patience 个 epoch loss 不下降时，自动进入下一阶段
-    stage0_max_epochs: int = 20     
-    stage0_patience: int = 5        
-    stage1_max_epochs: int = 40     
-    stage1_patience: int = 8        
-    stage2_max_epochs: int = 50     
-    stage2_patience: int = 8       
-    stage3_max_epochs: int = 60     
-    stage3_patience: int = 10        
+    stage0_max_epochs: int = 100
+    stage0_patience: int = 15
+    stage1_max_epochs: int = 100
+    stage1_patience: int = 15
+    stage2_max_epochs: int = 100
+    stage2_patience: int = 15
+    stage3_max_epochs: int = 100
+    stage3_patience: int = 15        
     
     dataset_size: int = 10000   # 每个 epoch 的样本数 (464M 模型需要足够数据)
     

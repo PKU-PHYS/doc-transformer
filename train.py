@@ -272,7 +272,10 @@ def train_stage(
         if "optimizer" in resume_ckpt:
             optimizer.load_state_dict(resume_ckpt["optimizer"])
         if "scheduler" in resume_ckpt:
-            scheduler.load_state_dict(resume_ckpt["scheduler"])
+            # 注意: 不恢复 scheduler state_dict，让新的 max_epochs 生效
+            # 旧的 state_dict 中 T_max 等参数可能与新配置不匹配
+            # scheduler 会以当前 epoch 对应的 step 重新计算 LR
+            pass
         if "scaler" in resume_ckpt:
             scaler.load_state_dict(resume_ckpt["scaler"])
         if "epoch" in resume_ckpt:
