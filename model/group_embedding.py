@@ -21,10 +21,10 @@ def generate_group_embeddings(group_ids_list: list[list[int]], d_model: int, sca
     random_vecs = {}
     for uid in unique_ids:
         vec = torch.randn(d_model, device=device)
-        # L2 归一化并缩放
+        # L2 归一化并放大到 sqrt(d_model) 量级，确保方差约为 1.0 (与其它 Embedding 匹配)
         norm = vec.norm(p=2)
         if norm > 0:
-            vec = (vec / norm) * scale
+            vec = (vec / norm) * scale * (d_model ** 0.5)
         random_vecs[uid] = vec
         
     # 组装每个 token 的组嵌入

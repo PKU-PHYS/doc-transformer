@@ -20,7 +20,7 @@ import matplotlib
 matplotlib.use("Agg")  # 无头模式
 import matplotlib.pyplot as plt
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import DataLoader
 
 from config import ModelConfig, TrainConfig
@@ -127,9 +127,18 @@ def train_stage(
     print(f"  distractor_level={distractor_level}")
     print(f"{'='*70}\n")
 
-    optimizer = AdamW(model.parameters(), lr=train_config.lr)
-    # Cosine 退火学习率
-    scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=train_config.lr * 0.1)
+    optimizer = AdamW(model.parameters(), lr=train_config.lr, weight_decay=0.01)
+    
+    # 预估总步数和 Warmup 步数
+    steps_per_epoch = dataset_size // train_config.batch_size
+    total_steps = max_epochs * steps_per_epoch
+    warmup_steps = int(total_steps * 0.05) # 5% 的 warmup
+    
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, 
+        num_warmup_steps=warmup_steps, 
+        num_training_steps=total_steps
+    )
 
     stage_log = {
         "stage": stage_name,
@@ -189,8 +198,8 @@ def train_stage(
                       f"Loss={batch_loss:.6f} "
                       f"tokens={avg_tokens:.0f} "
                       f"lr={lr_now:.2e}")
-
-        scheduler.step()
+                      
+            scheduler.step()
 
         epoch_time = time.time() - epoch_start
         avg_loss = epoch_loss / max(n_batches, 1)

@@ -12,12 +12,16 @@ class DecodeHead(nn.Module):
         
         # 数值预测：输出 1 维标量
         self.num_head = nn.Linear(config.d_model, 1)
+        nn.init.normal_(self.num_head.weight, std=0.001)
+        nn.init.constant_(self.num_head.bias, 0.0)
         
         # 布尔预测：输出 1 维 logits
         self.bool_head = nn.Linear(config.d_model, 1)
+        nn.init.normal_(self.bool_head.weight, std=0.01)
         
         # 文本预测：将 d_model 投射回 LM embedding 空间，然后算 cosine similarity 或 InfoNCE
         self.text_head = nn.Linear(config.d_model, config.frozen_lm_dim)
+        nn.init.normal_(self.text_head.weight, std=0.01)
         
     def predict_number(self, x_mask: Tensor) -> Tensor:
         """

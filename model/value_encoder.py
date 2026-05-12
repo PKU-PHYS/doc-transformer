@@ -11,11 +11,13 @@ class FourierFeatureEncoder(nn.Module):
     def __init__(self, n_feats: int, d_model: int, learnable: bool = True):
         super().__init__()
         if learnable:
-            # 初始化为标准正态分布，作为可学习参数
-            self.freqs = nn.Parameter(torch.randn(n_feats)) 
+            # 使用对数均匀分布初始化频率，覆盖从宏观趋势 (1e-4) 到微观细节 (1e1)
+            freqs = 10.0 ** torch.empty(n_feats).uniform_(-4, 1)
+            self.freqs = nn.Parameter(freqs) 
         else:
-            # 固定的几何级数频率：2 * pi * 2^(0, 1, 2, ...)
-            self.register_buffer('freqs', 2 * math.pi * (2.0 ** torch.arange(n_feats)))
+            # 固定的几何级数频率：从很小的频率开始
+            freqs = 10.0 ** torch.linspace(-4, 1, n_feats)
+            self.register_buffer('freqs', freqs)
             
         self.proj = nn.Linear(2 * n_feats, d_model)
 

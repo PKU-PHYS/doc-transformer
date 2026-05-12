@@ -360,9 +360,12 @@ class FourierFeatureEncoder(nn.Module):
     def __init__(self, n_feats, d_model, learnable=True):
         super().__init__()
         if learnable:
-            self.freqs = nn.Parameter(torch.randn(n_feats)) 
+            # 使用对数均匀分布初始化频率，覆盖从宏观趋势 (1e-4) 到微观细节 (1e1)
+            freqs = 10.0 ** torch.empty(n_feats).uniform_(-4, 1)
+            self.freqs = nn.Parameter(freqs) 
         else:
-            self.register_buffer('freqs', 2 * math.pi * (2.0 ** torch.arange(n_feats)))
+            freqs = 10.0 ** torch.linspace(-4, 1, n_feats)
+            self.register_buffer('freqs', freqs)
         self.proj = nn.Linear(2 * n_feats, d_model)
 
     def forward(self, x: Tensor): # x shape: (N,)
@@ -380,7 +383,8 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
     random_vecs = {}
     for uid in unique_ids:
         vec = torch.randn(d_model)
-        random_vecs[uid] = (vec / vec.norm(p=2)) * scale
+        # 必须放大到 sqrt(d_model) 量级以保证方差不坍缩
+        random_vecs[uid] = (vec / vec.norm(p=2)) * scale * (d_model ** 0.5)
         
     embeddings = []
     for gids in group_ids_list:
@@ -454,6 +458,15 @@ def generate_in_context_task(num_shots=3):
 ### Stage 3：混合鲁棒性训练（可选）
 - **数据形态**：混合 Stage 1（显式指令）和 Stage 2（隐式上下文推断），并大量注入无意义的干扰字段（Distractors）。
 - **训练目的**：防止灾难性遗忘（Catastrophic Forgetting），增强模型在真实噪音环境下的鲁棒性。
+
+### 8.4 大规模参数训练稳定性保障 (Scaling up to XXXL)
+当模型规模扩大至大参数级别（例如 `d_model=1536, L=16`，约 4.6 亿参数）且使用 `norm_first=True` 时，底层网络的输出方差会极大，如果目标函数又是大数值范围（如指数运算），极易引发 Huber Loss 瞬间爆炸（> 500）与动量崩溃。
+
+为保障大模型训练稳定性，实现中必须包含以下防线：
+1. **Step 级学习率预热 (Warmup)**：绝对禁止大模型直接以 `1e-4` 等高学习率冷启动。必须分配一定比例（如 5%）的训练步数用于线性预热（`get_cosine_schedule_with_warmup`），并将 `scheduler.step()` 移至每个 Batch 结束后执行，实现细粒度平滑过渡。
+2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重必须用极小的方差（如 `std=0.001`）初始化，偏置设为 `0.0`。这迫使大模型在训练初期的盲目猜测阶段输出接近 `0` 的保守数值，避免巨大误差带来的毁灭性梯度惩罚，为主干网络争取建立注意力几何的时间。
+3. **消除傅里叶特征的高频混叠**：如果 `freqs` 采用默认的正态分布初始化，模型只能捕获频率 1.0 附近的特征。当遇到物理公式中产生的巨大目标数值（如 `10000`）时，正弦波会发生严重的混叠（aliasing）与高频噪音。必须将 `freqs` 初始化为跨越多个量级的对数均匀分布（如 $10^{-4}$ 到 $10^1$），以确保模型能感知大数值的宏观差异。
+4. **防止组嵌入（Group Embedding）方差坍缩**：为求内积稳定，强行将高维向量的 L2 范数归一化为 1.0 会导致其内部元素的方差坍缩至 $1/d_{model}$（接近 0）。能量过弱会使 Transformer 完全忽视结构组嵌入，导致数组内原本不同的元素无法被有效区分。必须在归一化后乘以 $\sqrt{d_{model}}$，将方差恢复至正常的 `1.0` 尺度。
 
 ---
 
