@@ -32,6 +32,8 @@ class ModelConfig:
 class TrainConfig:
     batch_size: int = 16        # XXXL @ 512 tokens: 实测峰值 ~11-21G / 23.4G
     lr: float = 1e-4            # AdamW 学习率
+    weight_decay: float = 0.01  # AdamW 权重衰减
+    betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
     mask_ratio: float = 0.15    # 自监督掩码比例
     device: str = "cuda"
     

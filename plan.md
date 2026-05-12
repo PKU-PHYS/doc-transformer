@@ -132,22 +132,37 @@ $$\mathbf{t}_i = \underbrace{\mathbf{v}_i}_{\text{值编码}} + \underbrace{\mat
 
 | 数据类型 | 编码方式 |
 |----------|---------|
-| 数值型 | **傅里叶特征映射**（见下文详述） |
+| 数值型 | **Base-2 科学计数法解构** + 傅里叶特征映射（见下文详述） |
 | 文本型 | $\mathbf{v} = \mathbf{W}_\text{text} \cdot \text{FrozenLM}(x)$，冻结语言模型编码后投影 |
 | 布尔型 | $\mathbf{v} = \mathbf{W}_\text{bool} \cdot [x]$，0/1 标量投影 |
 | 被掩码 | $\mathbf{v} = \mathbf{m}$，一个可学习的掩码向量 |
 
-#### 数值型编码：傅里叶特征映射（Fourier Feature Mapping）
+#### 数值型编码：Base-2 Mantissa-Exponent Split（xVal 机制）
 
 如果将标量 $x$ 直接乘以权重向量 $\mathbf{W} \cdot x$，输出向量永远位于 $d$ 维空间中的**一条直线**上。这导致严重的**谱偏见（Spectral Bias）**——网络对高频细节（如 2.11 vs 2.12）极不敏感。
 
-**解法：傅里叶特征映射。** 用不同频率的正弦/余弦基函数将标量"炸开"到高维空间：
+**解法：Base-2 科学计数法解构。** 使用 IEEE 754 的 `torch.frexp` 在 O(1) 时间内将任意标量分解为**尾数**（Mantissa）和**指数**（Exponent）两部分：
 
-$$\text{Fourier}(x) = \left[\sin(\omega_1 x),\, \cos(\omega_1 x),\, \sin(\omega_2 x),\, \cos(\omega_2 x),\, \ldots,\, \sin(\omega_k x),\, \cos(\omega_k x)\right]$$
+$$x = M \times 2^E$$
 
-最终数值编码：
+其中 $M \in [0.5, 1.0)$（正数）或 $M \in (-1.0, -0.5]$（负数），$x=0$ 时 $M=0$。$E$ 为整数指数。
 
-$$\mathbf{v} = \mathbf{W}_\text{num} \cdot \text{Fourier}(x), \quad \mathbf{W}_\text{num} \in \mathbb{R}^{d \times 2k}$$
+**尾数编码：** 由于 $M$ 天然归一化在 $[-1, 1]$ 范围内，使用傅里叶特征映射将其展开为高频正余弦特征：
+
+$$\text{Fourier}(M) = \left[\sin(\omega_1 M),\, \cos(\omega_1 M),\, \ldots,\, \sin(\omega_k M),\, \cos(\omega_k M)\right]$$
+
+频率 $\omega$ 初始化为 $10^{[-1, 2]}$ 的对数均匀分布（因 $M$ 已归一化，无需覆盖 $10^{-4}$ 级低频）。
+
+**指数编码：** $E$ 通常是 $-50$ 到 $+49$ 之间的整数，使用查表嵌入：
+
+$$\mathbf{e} = \text{Embedding}(E + \text{offset}), \quad \text{Embedding} \in \mathbb{R}^{N_\text{bins} \times d}$$
+
+**最终数值编码（两路相加）：**
+
+$$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text{精度编码（尾数）}} + \underbrace{\text{Embedding}(E)}_{\text{量级编码（指数）}}$$
+
+这一设计使模型对数值的"精度"（0.50 vs 0.51）和"量级"（$10^3$ vs $10^{-3}$）获得了**完全解耦**的感知能力。
+
 
 ### 3.2 路径编码 $\mathbf{p}_i$（类比 GPT 的位置编码）
 
@@ -187,30 +202,43 @@ $$\mathbf{v} = \mathbf{W}_\text{num} \cdot \text{Fourier}(x), \quad \mathbf{W}_\
 ```
 ./
 ├── README.md                      # 子项目说明与运行指南
+├── pixi.toml                      # Pixi 包管理配置
 ├── config.py                      # 全局超参数与配置 (ModelConfig, TrainConfig)
 ├── data/
 │   ├── synthetic.py               # 顶层合成数据集与 Collate 函数
-│   ├── functions/                 # 数学函数注册表 (unary, binary, multivar...)
-│   ├── templates/                 # 结构模板引擎 (100+种JSON模板) 与 干扰字段生成器
+│   ├── in_context_generator.py    # In-Context Learning 任务生成器
+│   ├── functions/                 # 数学函数注册表
+│   │   ├── __init__.py            # 导入并触发所有函数模块注册
+│   │   ├── registry.py            # 基类 MathRelation、FunctionRegistry 与工厂函数
+│   │   ├── unary.py               # 单变量函数 (sin, cos, exp, log, sqrt, ...)
+│   │   ├── binary.py              # 双变量函数 (add, sub, mul, div, pow, ...)
+│   │   ├── multivar.py            # 多变量函数 (weighted_sum, dot_product, ...)
+│   │   ├── implicit.py            # 扩展数学函数 (多项式/有理式等，支持隐式渲染)
+│   │   └── composite.py           # 复合函数 (链式组合，如 sin(x+y))
+│   ├── templates/                 # 结构模板引擎
+│   │   ├── __init__.py
+│   │   ├── engine.py              # TemplateEngine: ~60 种基础 JSON 模板 (扁平/嵌套/数组/复合，含动态变体达数十万)
+│   │   └── distractors.py         # 干扰字段注入器 (inject_distractors)
 │   └── text_tasks/                # 纯文本推理任务生成器
+│       ├── __init__.py
+│       └── generators.py          # TextTaskGenerator: 13 种跨模态桥接任务
 ├── model/
 │   ├── __init__.py
 │   ├── json_parser.py             # JSON 递归解析算法 -> List[LeafNode]
 │   ├── frozen_lm.py               # 冻结句子模型包装与缓存机制
-│   ├── value_encoder.py           # 值编码器（傅里叶/文本/布尔/MASK）
+│   ├── value_encoder.py           # 值编码器（Base-2 frexp 尾数傅里叶 + 指数嵌入/文本/布尔/MASK）
 │   ├── path_encoder.py            # 路径编码器（GRU/Depth Embedding 双方案）
 │   ├── group_embedding.py         # 动态随机组嵌入生成与 L2 归一化
-│   ├── token_embedding.py         # 最终 token 嵌入组装 (Value + Path + Group)
-│   ├── transformer.py             # 标准双向 Transformer (含 Padding Mask)
-│   ├── decode_head.py             # 类型特定解码头 (数值/布尔/文本)
-│   └── document_transformer.py    # 顶层模型：端到端前向传播与 Loss 计算
+│   ├── token_embedding.py         # 最终 token 嵌入组装 (Value + Path + Group) + Batch 级去重
+│   ├── transformer.py             # 标准双向 Transformer (含 emb_norm + out_norm + Padding Mask)
+│   ├── decode_head.py             # 类型特定解码头 (数值/布尔/文本，极小方差初始化)
+│   └── document_transformer.py    # 顶层模型：端到端前向传播与 arcsinh Loss 计算
 ├── tests/
 │   ├── test_stage1_overfit.py     # 阶段 1：单样本无 Pad 过拟合测试 (Zero-Loss)
 │   ├── test_stage2_copy.py        # 阶段 2：单样本寻址与复制逻辑测试 (Logic Copy)
 │   └── test_stage3_padding.py     # 阶段 3：变长 Batch + Padding 阻断测试
-├── train.py                       # 正式训练入口
-├── inference.py                   # 推理入口
-└── utils.py                       # 工具函数
+├── train.py                       # 正式训练入口 (四阶段课程学习 + TensorBoard)
+└── inference.py                   # 推理入口 (支持 --checkpoint 参数或自动查找最新权重)
 ```
 
 ---
@@ -240,9 +268,13 @@ class ModelConfig:
     # 路径编码选择: "gru" 递归 或 "depth" 绝对深度
     path_encoding: str = "gru"  
     
-    # 傅里叶特征 (数值编码用)
+    # 傅里叶特征 (数值编码用，仅作用于 Base-2 尾数 M)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
+    
+    # 科学计数法解构 (Mantissa-Exponent Split)
+    n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
+    exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
     
     # 组嵌入缩放
     group_scale: float = 0.1    # 随机向量 L2 归一化后的模长 (降低以平衡 val/path 量级)
@@ -251,26 +283,33 @@ class ModelConfig:
 class TrainConfig:
     batch_size: int = 16        # XXXL @ 512 tokens: 实测峰值 ~11-21G / 23.4G
     lr: float = 1e-4            # AdamW 学习率
+    weight_decay: float = 0.01  # AdamW 权重衰减
+    betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
     mask_ratio: float = 0.15    # 自监督掩码比例
     device: str = "cuda"
     
     # 课程学习配置 — 每阶段: max_epochs (上限) + patience (收敛判定)
-    stage1_max_epochs: int = 50     
-    stage1_patience: int = 8        
-    stage2_max_epochs: int = 80     
-    stage2_patience: int = 10       
-    stage3_max_epochs: int = 40     
-    stage3_patience: int = 8        
+    # 当连续 patience 个 epoch loss 不下降时，自动进入下一阶段
+    stage0_max_epochs: int = 100
+    stage0_patience: int = 15
+    stage1_max_epochs: int = 100
+    stage1_patience: int = 15
+    stage2_max_epochs: int = 100
+    stage2_patience: int = 15
+    stage3_max_epochs: int = 100
+    stage3_patience: int = 15        
     
     dataset_size: int = 10000   # 每个 epoch 的样本数 (464M 模型需要足够数据)
     
-    stage1_target_tokens: int = 100   
-    stage2_target_tokens: int = 300   
+    stage0_target_tokens: int = 20    
+    stage1_target_tokens: int = 60    
+    stage2_target_tokens: int = 150   
     stage3_target_tokens: int = 200   
     
-    stage1_distractor_level: int = 1  
-    stage2_distractor_level: int = 2  
-    stage3_distractor_level: int = 3  
+    stage0_distractor_level: int = 0  
+    stage1_distractor_level: int = 0  
+    stage2_distractor_level: int = 3  
+    stage3_distractor_level: int = 1  
     
     checkpoint_dir: str = "checkpoints"
 ```
@@ -310,14 +349,21 @@ class JSONParser:
         self.group_counter = 0
         
     def parse(self, data: Any, current_path: List[str], current_groups: List[int]) -> List[LeafNode]:
-        if isinstance(data, (int, float, str, bool)):
-            val_type = "number" if isinstance(data, (int, float)) and not isinstance(data, bool) else type(data).__name__
-            return [LeafNode(value=data, value_type=val_type, path=current_path, group_ids=current_groups)]
+        if isinstance(data, bool):
+            return [LeafNode(value=data, value_type="boolean", path=current_path, group_ids=current_groups)]
+        elif isinstance(data, (int, float)):
+            return [LeafNode(value=data, value_type="number", path=current_path, group_ids=current_groups)]
+        elif isinstance(data, str):
+            if data == "[MASK]":
+                return [LeafNode(value=data, value_type="mask", path=current_path, group_ids=current_groups)]
+            return [LeafNode(value=data, value_type="string", path=current_path, group_ids=current_groups)]
+        elif data is None:
+            return []  # 忽略 None 值
             
         elif isinstance(data, dict):
             leaves = []
             for key, val in data.items():
-                new_path = current_path + [key]
+                new_path = current_path + [str(key)]
                 leaves.extend(self.parse(val, new_path, current_groups))
             return leaves
             
@@ -338,34 +384,56 @@ class JSONParser:
 1. **FunctionRegistry / TextTaskGenerator**：随机采样数学关系或文本推理任务。其中，纯文本推理任务 (`TextTaskGenerator`) 并非简单的占位符，而是被精心设计为**三大类跨模态桥接任务**：
    - **数值 → 文本分类** (如根据数值大小判断 magnitude、正负号、象限)
    - **文本 → 文本推理** (如输出反函数名称、计算导数表达式配对)
-   - **文本 → 数值检索** (如基于自然语言“archimedes_constant”输出 $3.141593$)
+   - **文本 → 数值检索** (如基于自然语言"archimedes_constant"输出 $3.141593$)
    这三类任务直接强制模型将 FrozenLM 的语义向量空间与傅里叶特征的高维数值空间进行深度对齐。
-2. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它不仅囊括了 5 大类（扁平、嵌套、数组、复合链式等）逾百种模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**，如全随机打乱字典键的顺序 (`_shuffle_dict`) 或概率性展平单层嵌套，极大化结构多样性，彻底破坏模型对固定 JSON 格式产生“位置捷径过拟合”的可能。
-3. **Distractor Injector**：随机向生成的 JSON 中插入完全无关的干扰分支（如 `timestamp`, `confidence` 等），迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点。
+2. **FunctionRegistry 的 Tier 分级过滤**：每个注册的数学函数都带有 `tier` 属性（0=最简单如加减乘除，1=标准复杂度如三角函数、指数对数等）。在 Stage 0 中通过 `FunctionRegistry.set_filter(exact_tier=0)` 仅使用最简函数冷启动；其他阶段使用 `set_filter(max_tier=1)` 允许全部函数。
+3. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它囊括了 4 大类（扁平、嵌套、数组、复合函数专用）约 60 种基础模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**，如全随机打乱字典键的顺序 (`_shuffle_dict`) 或概率性展平单层嵌套，极大化结构多样性，彻底破坏模型对固定 JSON 格式产生"位置捷径过拟合"的可能。结合键名同义词池的随机化与后处理变换，有效变体数可达数十万。此外 `render_simple` 方法专为 Stage 0 设计，强制使用最简扁平模板。
+4. **Distractor Injector**：随机向生成的 JSON 中插入完全无关的干扰分支（如 `timestamp`, `confidence` 等），迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点。
 
 **数据流伪代码**：
 ```python
 def __getitem__(self, idx):
-    # 1. 采样与渲染
-    if random.random() < self.text_task_ratio:
-        doc = TextTaskGenerator.generate()
-        inject_distractors(doc)
+    # 0. 设定函数难度层级
+    if current_mode == "simple":
+        FunctionRegistry.set_filter(exact_tier=0)
     else:
+        FunctionRegistry.set_filter(max_tier=1)
+    
+    # 1. 根据 train_mode 选择生成策略
+    if current_mode == "simple":
         rel = FunctionRegistry.sample()
-        doc = TemplateEngine.render(rel)
-        inject_distractors(doc)
-        
+        doc = TemplateEngine.render_simple(rel)  # 极简扁平模板
+    elif current_mode == "in_context":
+        return generate_in_context_task(...)      # In-Context 专用生成器
+    elif current_mode == "explicit_long" or (target_tokens is not None and target_tokens > 80):
+        doc = generate_mixed_long_document(target_tokens)  # 混合长文档（内部已含 distractor 注入）
+    else:  # "explicit" — 按概率分配
+        nested_prob = [0.0, 0.2, 0.5, 0.8][min(distractor_level, 3)]
+        r = random.random()
+        if r < text_task_ratio:
+            doc = TextTaskGenerator.generate()
+        elif r < text_task_ratio + 0.3:
+            doc = generate_compound_document(n_relations)   # 复合文档
+        elif r < text_task_ratio + 0.5:
+            doc = generate_array_document(n_items)          # 数组文档
+        else:
+            doc = generate_math_document()                  # 单关系文档
+    
     # 2. 解析成叶子节点序列
     parser = JSONParser()
     leaves = parser.parse(doc, ["doc"], [])
     
-    # 3. 超长截断与随机 Mask
+    # 3. 超长截断
     leaves = leaves[:self.max_tokens]
-    mask_indices = random.sample(range(len(leaves)), num_masks)
-    for i in mask_indices:
-        leaves[i].value = "[MASK]"
-        leaves[i].value_type = "mask"
-        
+    
+    # 4. "输出优先" Mask 策略
+    #    最后一个数值节点 = 输出变量，优先 mask
+    #    避免 mask 不可逆函数 (max/min/abs/sign) 的输入，消除不可确定的训练噪声
+    num_indices = [i for i, l in enumerate(leaves) if l.value_type == "number"]
+    output_idx = num_indices[-1]  # 输出变量
+    mask_indices = [output_idx]
+    # 如需更多 mask，从剩余数值节点中选，仍不够则从非数值节点补
+    
     return leaves, target_masks
 ```
 
@@ -377,42 +445,68 @@ def __getitem__(self, idx):
 
 ### 7.1 值编码器 (`model/value_encoder.py`)
 
-**核心：数值型傅里叶编码 (FourierFeatureEncoder)**
+**核心：Base-2 科学计数法解构 (Mantissa-Exponent Split)**
+
+数值编码分为两路：尾数编码器（傅里叶特征）和指数嵌入表。
+
 ```python
 class FourierFeatureEncoder(nn.Module):
+    """仅处理尾数 M ∈ [-1, 1]（由 torch.frexp 产生）"""
     def __init__(self, n_feats, d_model, learnable=True):
         super().__init__()
         if learnable:
-            # 使用对数均匀分布初始化频率，覆盖从宏观趋势 (1e-4) 到微观细节 (1e1)
-            freqs = 10.0 ** torch.empty(n_feats).uniform_(-4, 1)
+            # 对数均匀分布初始化频率，为 M ∈ [-1, 1] 优化
+            # [0.1, 100]: 最低频率捕捉宏观趋势，最高频率区分 0.50 和 0.51
+            freqs = 10.0 ** torch.empty(n_feats).uniform_(-1, 2)
             self.freqs = nn.Parameter(freqs) 
         else:
-            freqs = 10.0 ** torch.linspace(-4, 1, n_feats)
+            freqs = 10.0 ** torch.linspace(-1, 2, n_feats)
             self.register_buffer('freqs', freqs)
         self.proj = nn.Linear(2 * n_feats, d_model)
 
-    def forward(self, x: Tensor): # x shape: (N,)
-        angles = x.unsqueeze(-1) * self.freqs  # (N, 1) * (n_feats) -> (N, n_feats)
-        fourier = torch.cat([angles.sin(), angles.cos()], dim=-1) # (N, 2*n_feats)
+    def forward(self, x: Tensor): # x shape: (N,) — 尾数 M
+        angles = x.unsqueeze(-1) * self.freqs
+        fourier = torch.cat([angles.sin(), angles.cos()], dim=-1)
         return self.proj(fourier) # (N, d_model)
+
+class ValueEncoder(nn.Module):
+    def __init__(self, d_model, frozen_lm_dim, n_fourier_feats, fourier_learnable,
+                 n_exponent_bins=100, exponent_offset=50):
+        super().__init__()
+        # 数值型编码：Base-2 科学计数法解构
+        self.mantissa_encoder = FourierFeatureEncoder(n_fourier_feats, d_model, fourier_learnable)
+        self.exponent_embed = nn.Embedding(n_exponent_bins, d_model)  # E 查表
+        # 文本、布尔、掩码编码器 (略)
+    
+    def forward(self, node_types, raw_values, lm_embeddings=None):
+        # 数值型：Base-2 torch.frexp 向量化编码
+        if num_indices:
+            raw = torch.tensor(num_vals, dtype=torch.float32, device=device)
+            m_tensor, e_tensor = torch.frexp(raw)
+            # m_tensor ∈ [0.5, 1.0) 或 (-1.0, -0.5]，x=0 时 m=0
+            # e_tensor 为整数指数，x = m * 2^e
+            e_indices = (e_tensor + self.exponent_offset).clamp(0, self.n_exponent_bins - 1)
+            m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数
+            e_emb = self.exponent_embed(e_indices)     # (N_num, d_model) — 查表获取量级
+            out[num_indices] = m_emb + e_emb  # 直接相加
 ```
 
 ### 7.2 组嵌入 (`model/group_embedding.py`)
 
 ```python
-def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, scale: float) -> Tensor:
+def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, scale: float, device: str) -> Tensor:
     unique_ids = set(gid for gids in group_ids_list for gid in gids)
     
     random_vecs = {}
     for uid in unique_ids:
-        vec = torch.randn(d_model)
+        vec = torch.randn(d_model, device=device)
         # 必须放大到 sqrt(d_model) 量级以保证方差不坍缩
         random_vecs[uid] = (vec / vec.norm(p=2)) * scale * (d_model ** 0.5)
         
     embeddings = []
     for gids in group_ids_list:
         if not gids:
-            embeddings.append(torch.zeros(d_model))
+            embeddings.append(torch.zeros(d_model, device=device))
         else:
             sum_vec = sum(random_vecs[gid] for gid in gids)
             embeddings.append(sum_vec)
@@ -429,14 +523,15 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 > 在 `src_key_padding_mask` 中，**`True` 表示“这是垃圾填充，请忽略（赋 $-\infty$）”**，**`False` 表示“这是有效数据，请计算”**。这与普通直觉完全相反！在 `collate_fn` 生成该矩阵时切勿填反，否则网络只会对着全 `<PAD>` 的张量算 Attention，第一步 Loss 就会变成 `NaN`。
 
 **解码头**仅提取被掩码节点的向量：
-- **数值型预测**：`pred_val = Linear(d_model -> 1)(h_mask).squeeze()`，使用 `HuberLoss`。
+- **数值型预测**：`pred_val = Linear(d_model -> 1)(h_mask).squeeze()`，在 **arcsinh 压缩空间**中使用 `HuberLoss`（即 `HuberLoss(arcsinh(pred), arcsinh(target))`）。arcsinh 变换消除了极端数值（如 $10^4$）带来的梯度方差爆炸，使模型对大数值和小数值同等敏感。
 - **布尔型预测**：使用 `BCEWithLogitsLoss`。
-- **文本型预测**：投影到 384 维后，使用 InfoNCE 或 Cosine Embedding Loss 对齐 `FrozenLM(target_text)`。
+- **文本型预测**：投影到 384 维后，使用 Cosine Embedding Loss 对齐 `FrozenLM(target_text)`。
 
 ### 7.4 Token 嵌入引擎的全局去重与缓存优化 (Global Deduplication & Caching)
 为打破 `FrozenLM` 处理大规模深层 JSON 时带来的推理瓶颈（即同一 Batch 的不同节点内大量重复出现如 `"materials"`, `"formula"` 等短语），底层网络引入了两项超前性能优化：
 1. **Batch 级全局词表去重 (Global Token Lookup)**：在每次前向传播的起始阶段 (`TokenEmbedding`)，引擎会主动提取当前 Batch 内所有叶子的字符串值和路径节点，放入 `set` 统一去重。提取出的独一无二的词汇表会被“一次性”送入语言模型，并建立 `text_lookup` 哈希表供后续路径编码和值编码查询，将庞大 Batch 下的大量冗余文本推理开销瞬间清零。
 2. **跨步内存级缓存与防爆机制 (Eviction Policy)**：`FrozenLM` 内部封装了带状态的字典缓存 (`self._cache`)，使跨 Batch 间频繁出现的高频键名永远只需编码一次。同时加入了**自动驱逐清洗机制** (`if len(self._cache) > 10000: self._cache.clear()`)，完美杜绝了持续数万个 Epoch 的海量生僻随机词采样可能引发的 GPU 显存泄漏 (OOM) 崩溃问题。
+3. **Batch 级展平优化 (Batch Flattening)**：`DocumentTransformer.forward()` 在嵌入阶段会先将整个 Batch 的 leaves 展平为一个大列表，单次调用 `TokenEmbedding` 处理所有 leaves（内部已按类型分组批量化），然后 scatter 回 `(B, max_len, d_model)`。嵌入阶段关闭 `autocast` 以避免手动张量赋值与 BF16 的不兼容问题。
 ## 八、训练策略与课程学习 (Curriculum Learning)
 
 整个训练过程被设计为四个由易到难的课程阶段，逐步提升任务复杂度与干扰噪声：
@@ -446,64 +541,97 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 - **数据**：固定为全扁平键值对 (如 `{"a": 1, "b": 2, "func": "add", "result": 3}`)。
 - **配置**：`target_tokens=20`, `distractor_level=0`。
 
-### 阶段 1：结构与显式规则基础训练
-- **数据形态**：单条 JSON 或少量 JSON，内部包含显式的物理规律名称（如 `function: "band_gap_formula"`）或参数。
-- **训练目的**：让模型学会理解树状结构、路径编码（Path Encoding）、组嵌入（Group Embedding），以及基础的傅里叶数值计算和跨节点复制寻址。
-- **配置开关**：`train_mode = "explicit"`
+### 阶段 1：复合与树状结构基础训练 (Stage 1 - Composite)
+- **切换时机**：Stage 0 的 Loss 趋于收敛（patience 触发）。
+- **数据形态**：单条或多条数学关系打包的 JSON 文档，包含嵌套结构（如 `{params: {...}, result: val}`）、复合文档（多条关系打包为子对象）、数组文档（多个同结构对象组成的 JSON 数组）和文本推理任务，内部包含显式的函数名称字段（如 `function: "sin"`）。
+- **训练目的**：让模型在 Stage 0 的数值基础上，进一步学会理解树状结构、路径编码（Path Encoding）、组嵌入（Group Embedding），以及跨节点复制寻址。
+- **配置**：`train_mode="explicit"`, `target_tokens=60`, `distractor_level=0`。
+- **函数过滤**：`FunctionRegistry.set_filter(max_tier=1)`，允许 Tier 0 和 Tier 1 函数。
 
-### Stage 2：连续预训练（强制上下文规则归纳 In-Context Rule Induction）
-- **切换时机**：Stage 1 的 Loss 趋于收敛且验证任务通过。
-- **数据形态**：包含多个对象的 JSON 数组（Few-shot 演示），**移除显式的 `function` 字段**。
+### 阶段 2：抗噪训练 (Stage 2 - Anti-noise)
+- **切换时机**：Stage 1 的 Loss 趋于收敛。
+- **数据形态**：混合长文档，包含多条数学关系、文本任务和大量干扰字段（Distractors），通过 `generate_mixed_long_document` 循环追加内容直至接近 `target_tokens`。
+- **训练目的**：迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点，增强模型在真实噪音环境下的鲁棒性。
+- **配置**：`train_mode="explicit_long"`, `target_tokens=150`, `distractor_level=3`（重度干扰）。
+
+### 阶段 3：上下文规则归纳 (Stage 3 - In-Context Learning)
+- **切换时机**：Stage 2 的 Loss 趋于收敛。
+- **数据形态**：包含多个对象的纯 JSON 数组（Few-shot 演示），**移除显式的 `function` 字段**。多条 demonstrations 与 1 条 query 并列放入同一个数组中。
 - **训练目的**：迫使模型激活多头注意力机制，跨越 JSON 组别观察前序数据的输入输出对，推断出隐含的数学规律，并应用到预测目标（`[MASK]`）上。
+- **配置**：`train_mode="in_context"`, `target_tokens=200`, `distractor_level=1`（轻度干扰）。
 
-**伪代码：Stage 2 隐式上下文数据生成 (`data/in_context_generator.py`)**
+**伪代码：In-Context 数据生成 (`data/in_context_generator.py`)**
 ```python
-def generate_in_context_task(num_shots=3):
-    # 1. 随机采样一个未知的数学关系（或物理公式）
-    rel = FunctionRegistry.sample()
+def generate_in_context_task(target_tokens=None, max_tokens=512, distractor_level=0):
+    # 1. 拿到一个 generator 引用，多次调用获取同类函数的不同采样
+    gen = FunctionRegistry.sample_generator()
     
-    # 2. 生成多条演示数据 (shots) + 1条目标数据
+    # 2. 动态计算 shots 数量（根据 target_tokens 自适应）
+    if target_tokens is not None:
+        tokens_per_shot = random.randint(8, 14)  # 实测平均值
+        query_reserve = tokens_per_shot + 5       # 为 query 预留的 token 数
+        available = max(target_tokens - query_reserve, tokens_per_shot)
+        actual_shots = max(1, min(40, available // tokens_per_shot))
+        actual_shots = max(1, min(40, int(actual_shots * random.uniform(0.7, 1.3))))  # ±30% 随机性
+    else:
+        actual_shots = random.randint(2, 6)
+    
+    # 3. 生成 demonstrations + query（全部使用 render_implicit 隐去函数名）
     context_jsons = []
-    for _ in range(num_shots):
-        # 渲染不带 function 名称的隐式推断 JSON
-        doc = TemplateEngine.render_implicit(rel) 
+    for _ in range(actual_shots):
+        companion_rel = gen()
+        doc = TemplateEngine.render_implicit(companion_rel)
+        if distractor_level > 0:
+            inject_distractors(doc, ...)
         context_jsons.append(doc)
-        
-    target_doc = TemplateEngine.render_implicit(rel)
     
-    # 3. 将它们放入一个数组中作为 In-Context Prompt
-    final_batch = {
-        "task_id": generate_uuid(),
-        "demonstrations": context_jsons,
-        "query": target_doc
-    }
+    target_doc = TemplateEngine.render_implicit(gen())
     
-    # 解析并 Mask Target
-    leaves = JSONParser().parse(final_batch, ["root"], [])
-    # 找到 query 里的目标值并 MASK (伪代码)
-    mask_target_node(leaves)
-    return leaves
+    # 4. 纯数组并列结构（不使用 dict 包装）
+    final_batch = context_jsons + [target_doc]
+    
+    # 5. 解析并 Mask 最后一个元素的数值/字符串节点
+    leaves = JSONParser().parse(final_batch, ["records"], [])
+    # 通过 group_ids 定位 query（数组最后一个元素的所有叶子共享同一 group_id）
+    # 注意：JSONParser 不会将数组索引加入路径（§2.2 核心规则），因此只能通过 group_ids 区分
+    last_group_id = leaves[-1].group_ids[0] if leaves and leaves[-1].group_ids else None
+    if last_group_id is not None:
+        query_indices = [i for i, node in enumerate(leaves)
+                         if node.group_ids and node.group_ids[0] == last_group_id
+                         and node.value_type in ("number", "string")]
+    else:
+        query_indices = []
+    
+    if query_indices:
+        mask_indices = random.sample(query_indices, min(len(query_indices), random.randint(1, 2)))
+    else:
+        # fallback: 当 query_indices 为空时，随机 mask 10% 节点
+        num_masks = max(1, int(len(leaves) * 0.1))
+        mask_indices = random.sample(range(len(leaves)), min(num_masks, len(leaves)))
+    
+    return leaves, target_masks
 ```
 
-### Stage 3：混合鲁棒性训练（可选）
-- **数据形态**：混合 Stage 1（显式指令）和 Stage 2（隐式上下文推断），并大量注入无意义的干扰字段（Distractors）。
-- **训练目的**：防止灾难性遗忘（Catastrophic Forgetting），增强模型在真实噪音环境下的鲁棒性。
+### 关于 Mixed 模式
+`train_mode="mixed"` 作为一个可选的混合模式保留在 `SyntheticDataset` 中，当被选中时会按权重随机分配：40% explicit + 40% in_context + 20% explicit_long。可用于未来的混合鲁棒性训练阶段，防止灾难性遗忘。
 
 ### 8.4 大规模参数训练稳定性保障 (Scaling up to XXXL)
 当模型规模扩大至大参数级别（例如 `d_model=1536, L=16`，约 4.6 亿参数）且使用 `norm_first=True` 时，底层网络的输出方差会极大，如果目标函数又是大数值范围（如指数运算），极易引发 Huber Loss 瞬间爆炸（> 500）与动量崩溃。
 
 为保障大模型训练稳定性，实现中必须包含以下防线：
-1. **Step 级学习率预热 (Warmup)**：绝对禁止大模型直接以 `1e-4` 等高学习率冷启动。必须分配一定比例（如 5%）的训练步数用于线性预热（`get_cosine_schedule_with_warmup`），并将 `scheduler.step()` 移至每个 Batch 结束后执行，实现细粒度平滑过渡。
+1. **Step 级学习率预热 (Warmup)**：绝对禁止大模型直接以 `1e-4` 等高学习率冷启动。使用 `get_cosine_schedule_with_warmup`，预热步数为 `min(625, total_steps // 10)`（约 10% 或固定上限 625 步，防止长阶段过度预热）。`scheduler.step()` 在每个 Batch 结束后执行，实现细粒度平滑过渡。
 2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重必须用极小的方差（如 `std=0.001`）初始化，偏置设为 `0.0`。这迫使大模型在训练初期的盲目猜测阶段输出接近 `0` 的保守数值，避免巨大误差带来的毁灭性梯度惩罚，为主干网络争取建立注意力几何的时间。此外，为全面保障各类目标的预测稳定性，布尔分类头 (`bool_head`) 和文本匹配头 (`text_head`) 的权重也应当应用较小的方差（如 `std=0.01`）进行初始化约束。
-3. **消除傅里叶特征的高频混叠**：如果 `freqs` 采用默认的正态分布初始化，模型只能捕获频率 1.0 附近的特征。当遇到物理公式中产生的巨大目标数值（如 `10000`）时，正弦波会发生严重的混叠（aliasing）与高频噪音。必须将 `freqs` 初始化为跨越多个量级的对数均匀分布（如 $10^{-4}$ 到 $10^1$），以确保模型能感知大数值的宏观差异。
+3. **消除傅里叶特征的高频混叠**：由于 Base-2 frexp 解构后尾数 $M \in [-1, 1]$ 已天然归一化，傅里叶频率初始化为 $10^{[-1, 2]}$ 的对数均匀分布即可覆盖从宏观趋势（0.1）到微观精度（100）的全部特征尺度。量级信息由指数嵌入表 `exponent_embed` 独立处理，彻底消除了大数值混叠问题。
 4. **防止组嵌入（Group Embedding）方差坍缩**：为求内积稳定，强行将高维向量的 L2 范数归一化为 1.0 会导致其内部元素的方差坍缩至 $1/d_{model}$（接近 0）。能量过弱会使 Transformer 完全忽视结构组嵌入，导致数组内原本不同的元素无法被有效区分。必须在归一化后乘以 $\sqrt{d_{model}}$，将方差恢复至正常的 `1.0` 尺度。
-5. **嵌入层独立归一化 (Embedding LayerNorm)**：当主干 Transformer 使用 `norm_first=True` (Pre-LN) 时，第一层的 LayerNorm 是作用在注意力的分支上，而残差主干（Residual Stream）在初始阶段未受任何归一化约束。由于最终的 Token 嵌入是值、路径、组嵌入之和，存在极大的初始方差累积。必须在传入 `TransformerEncoder` 前额外应用一个全局的 `nn.LayerNorm(d_model)`，彻底截断残差流初始的巨大方差膨胀，避免损失爆炸。
+5. **嵌入层独立归一化 (Embedding LayerNorm)**：当主干 Transformer 使用 `norm_first=True` (Pre-LN) 时，第一层的 LayerNorm 是作用在注意力的分支上，而残差主干（Residual Stream）在初始阶段未受任何归一化约束。由于最终的 Token 嵌入是值、路径、组嵌入之和，存在极大的初始方差累积。必须在传入 `TransformerEncoder` 前额外应用一个全局的 `nn.LayerNorm(d_model)`（代码中为 `GlobalTransformer.emb_norm`），彻底截断残差流初始的巨大方差膨胀，避免损失爆炸。此外，Transformer 输出后还加了一层 `out_norm = nn.LayerNorm(d_model)` 用于稳定解码头的输入分布。
+6. **全局梯度范数裁剪 (Gradient Clipping)**：在每个训练步的 `scaler.unscale_()` 之后、`scaler.step()` 之前，对全部参数执行 `clip_grad_norm_(max_norm=1.0)`。这是防止偶发的极端样本（如指数函数产生的大数值）导致单步梯度爆炸、破坏已学习注意力几何的最后一道防线。裁剪后的梯度范数同时被记录至 TensorBoard (`grad_norm`)，用于诊断训练是否处于稳定区间。
 
 ### 8.5 自动化课程学习调度与工程化加速
-为保障三阶段课程学习连续平稳进行并极大化利用硬件算力，训练入口 (`train.py`) 需要部署以下工程组件：
+为保障四阶段课程学习连续平稳进行并极大化利用硬件算力，训练入口 (`train.py`) 需要部署以下工程组件：
 1. **基于 Patience 的自动阶段流转**：摒弃单一的 `epochs` 设置。为每个阶段设置独立的目标词元长度 (`target_tokens`) 和干扰强度 (`distractor_level`)。利用 `patience` 机制监控阶段收敛，当验证 Loss 连续 `patience` 轮不再改善时，自动保存模型并无缝切换至下一阶段（例如从 Stage 1 进入 Stage 2），极大减少人工干预。
 2. **混合精度训练 (BF16 AMP)**：当模型攀升至数亿参数，应当结合 `torch.amp.autocast('cuda', dtype=torch.bfloat16)` 与 `GradScaler`。BFloat16 保留了与 FP32 相同的指数位，既有效杜绝了大规模数值计算时的下溢出，又能大幅降低显存开销并带来近 2 倍的吞吐量提升。
-3. **多维指标监控与诊断**：引入 TensorBoard 实时记录各阶段的训练动态（Loss, 学习率, GPU显存/峰值利用率）。不仅要求记录 Loss，还必须在每个阶段内定期提取真实样本（如每 200 个 batch）展示其输入、预测值与真实值的文本对照 (`_log_sample_case`)，并在全部阶段完结后自动绘制跨阶段的 Loss 曲线图像供后续归纳总结。
+3. **多维指标监控与诊断**：引入 TensorBoard 实时记录各阶段的训练动态（Loss, 学习率, GPU显存/峰值利用率, 梯度范数）。每 200 个 batch 调用 `_log_sample_case` 展示详细诊断输出，包括：将叶子节点按组关联分为 Useful Leaves（与 mask 同组）和 Distractor Leaves（无关干扰），自动推断函数上下文（通过 `FUNC_NAME_KEYS` 匹配函数名字段），并分类型显示预测值与真实值的对比（数值显示绝对/相对误差，布尔显示 logit，文本显示余弦相似度）。全部阶段完结后自动绘制跨阶段的 Loss 曲线图像供后续归纳总结。
+4. **完全可复现的断点续训 (Deterministic Resume)**：每个 checkpoint 除模型权重外，还完整保存 optimizer state_dict、scheduler state_dict、GradScaler state_dict、当前 epoch/global_step、best_loss 以及 Python/PyTorch/CUDA 的全部随机数生成器状态 (`get_rng_states`)。恢复时先加载模型权重，再通过 `scheduler.load_state_dict()` 精确恢复学习率调度器状态（若 checkpoint 中缺少 scheduler 状态，则 fallback 为循环快进到对应 step），最后恢复 RNG 状态，确保数据生成和 dropout 等随机行为与连续训练完全一致。训练入口支持 `--resume <checkpoint.pth>` 命令行参数，自动识别 checkpoint 所属阶段并跳过已完成的前序阶段。
 
 ---
 
@@ -525,4 +653,4 @@ def generate_in_context_task(num_shots=3):
 - **断言判断**：Loss 同样必须收敛到趋于 0。证明 `-inf` 被正确应用，没有 Ghost Entanglement。
 
 ### 阶段 4：正式训练 (`train.py`)
-在合成数据生成器 (带有些微物理相关性噪音) 的无限流下训练：先经过 Stage 1 学习基础架构，之后通过 Stage 2 注入 In-Context 归纳能力，保存 Checkpoint，运行 `inference.py`。
+在合成数据生成器的无限流下按四阶段课程学习训练：Stage 0 极简预热 → Stage 1 复合结构基础 → Stage 2 抗噪训练 → Stage 3 In-Context 归纳能力。每阶段基于 patience 自动切换，保存 Checkpoint，完成后运行 `inference.py`。

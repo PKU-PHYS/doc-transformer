@@ -5,7 +5,6 @@
 支持动态 shots 数量：当指定 target_tokens 时，自动计算需要多少 shots 来接近目标长度。
 """
 
-import uuid
 import random
 from typing import List, Tuple, Dict, Any, Optional
 
@@ -79,13 +78,19 @@ def generate_in_context_task(
     if max_tokens is not None and len(leaves) > max_tokens:
         leaves = leaves[:max_tokens]
 
-    # 6. 找到数组最后一个元素（相当于原来的 query）里的数值或文本节点并 MASK
+    # 6. 找到数组最后一个元素（query）里的数值或文本节点并 MASK
+    #    JSONParser 不会将数组索引加入路径（§2.2 核心规则），
+    #    因此必须通过 group_ids 来定位最后一个数组元素。
     target_masks = {}
-    last_idx_str = f"[{len(final_batch) - 1}]"
-    query_indices = [
-        i for i, node in enumerate(leaves)
-        if len(node.path) > 1 and node.path[1] == last_idx_str and node.value_type in ("number", "string") and node.value_type != "mask"
-    ]
+    last_group_id = leaves[-1].group_ids[0] if (leaves and leaves[-1].group_ids) else None
+    if last_group_id is not None:
+        query_indices = [
+            i for i, node in enumerate(leaves)
+            if node.group_ids and node.group_ids[0] == last_group_id
+            and node.value_type in ("number", "string")
+        ]
+    else:
+        query_indices = []
 
     if query_indices:
         num_masks = min(len(query_indices), random.randint(1, 2))

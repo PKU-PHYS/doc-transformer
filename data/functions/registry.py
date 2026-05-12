@@ -274,6 +274,7 @@ def make_multivar_generator(
     output_keys: List[str],
     compute: Callable[[Dict[str, float]], float],
     max_retries: int = 20,
+    tier: int = 1,
 ) -> Callable[[], MathRelation]:
     """
     为多变量函数创建并注册数据生成器。
@@ -281,6 +282,7 @@ def make_multivar_generator(
     var_defs: [(role_name, key_synonyms, (lo, hi)), ...] — 输入变量定义
     output_role: 输出变量的角色名
     compute: 接收 {role: value} 返回输出值
+    tier: 难度层级 (0=最简单, 1=标准复杂度)
     """
     _out_keys = output_keys
 
@@ -319,5 +321,7 @@ def make_multivar_generator(
             _generator=generator,
         )
 
+    generator.tier = tier
     FunctionRegistry.register(generator)
     return generator
+

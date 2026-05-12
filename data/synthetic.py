@@ -225,9 +225,11 @@ class SyntheticDataset(Dataset):
         max_tokens: 单样本最大叶子数，超过则截断。None 表示不限制。
         use_old_generator: 是否使用旧版生成器（用于兼容性测试）
         train_mode: 训练模式:
+            - "simple": Stage 0, 极简扁平 KV，Tier 0 函数冷启动
             - "explicit": Stage 1, 显式规则, 单/复合文档
-            - "in_context": Stage 2, 隐式上下文推断
-            - "mixed": Stage 3, 混合模式
+            - "explicit_long": Stage 2, 混合长文档 + 重度干扰
+            - "in_context": Stage 3, 隐式上下文推断
+            - "mixed": 混合模式 (40% explicit + 40% in_context + 20% explicit_long)
         target_tokens: 目标序列长度。生成器会尽量生成接近此长度的文档。
                        None 表示不限制（使用默认生成策略）。
         distractor_level: 干扰强度 (0-3)。
@@ -256,7 +258,7 @@ class SyntheticDataset(Dataset):
         # 模式判定
         current_mode = self.train_mode
         if current_mode == "mixed":
-            # Stage 3: 按权重随机选择
+            # 备用混合模式：按权重随机选择（当前未被任何 Stage 使用）
             r = random.random()
             if r < 0.4:
                 current_mode = "explicit"

@@ -1,15 +1,17 @@
 """
-课程学习训练入口 — 按 plan.md 第八章执行三阶段训练。
+课程学习训练入口 — 按 plan.md 第八章执行四阶段课程学习训练。
 
-  Stage 1: 显式规则基础训练 (explicit)
-  Stage 2: In-Context 上下文规则归纳 (in_context)
-  Stage 3: 混合鲁棒性训练 (mixed)
+  Stage 0: 极简预热训练 (simple) — Tier 0 扁平 KV
+  Stage 1: 复合与树状结构基础训练 (explicit) — 嵌套/复合/数组/文本任务
+  Stage 2: 抗噪训练 (explicit_long) — 长文档 + 重度干扰
+  Stage 3: 上下文规则归纳 (in_context) — 隐式函数推断
 
 特性：
   - 基于 loss 收敛自动切换阶段 (patience-based)
   - 每个 Stage 在 loss 不再下降时自动结束
   - Loss 曲线自动保存为 PNG 图片
   - 定期保存 checkpoint (每 N epochs)
+  - 支持 --resume 断点续训，含完整 RNG 状态恢复
 """
 
 import os
@@ -75,7 +77,7 @@ def plot_loss_curves(all_logs: dict, save_dir: str):
     if len(all_logs) == 1:
         axes = [axes]
 
-    colors = {"stage1": "#4CAF50", "stage2": "#2196F3", "stage3": "#FF9800"}
+    colors = {"stage0": "#9C27B0", "stage1": "#4CAF50", "stage2": "#2196F3", "stage3": "#FF9800"}
 
     for ax, (stage_key, log) in zip(axes, all_logs.items()):
         losses = log["losses"]
@@ -279,7 +281,7 @@ def train_stage(
     print(f"{'='*70}\n")
 
     optimizer = AdamW(model.parameters(), lr=train_config.lr, 
-                      weight_decay=0.01, betas=(0.9, 0.95))
+                      weight_decay=train_config.weight_decay, betas=train_config.betas)
     
     # 预估总步数和 Warmup 步数
     steps_per_epoch = dataset_size // train_config.batch_size
@@ -315,10 +317,13 @@ def train_stage(
         if "global_step" in resume_ckpt:
             global_step = resume_ckpt["global_step"]
         
-        # 快进 scheduler 到恢复点对应的 step，保持 LR 轨迹连续
-        resume_steps = start_epoch * steps_per_epoch
-        for _ in range(resume_steps):
-            scheduler.step()
+        # 恢复 scheduler 状态：优先使用 state_dict（精确），fallback 到循环快进
+        if "scheduler" in resume_ckpt:
+            scheduler.load_state_dict(resume_ckpt["scheduler"])
+        else:
+            resume_steps = start_epoch * steps_per_epoch
+            for _ in range(resume_steps):
+                scheduler.step()
         # 恢复随机状态，确保数据生成和 dropout 等完全一致
         if "rng_states" in resume_ckpt:
             set_rng_states(resume_ckpt["rng_states"])
