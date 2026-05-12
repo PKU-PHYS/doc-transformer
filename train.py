@@ -113,52 +113,95 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
     print(f"  🔍 Sample Case [{stage_name}] E{epoch:03d} B{batch_idx:04d}")
     print(f"  {'─'*60}")
     
-    # 显示所有叶子节点（简化路径）
-    print(f"  📋 Leaves ({len(leaves)} tokens):")
-    for i, leaf in enumerate(leaves):
-        path_str = ".".join(leaf.path[-2:]) if len(leaf.path) > 2 else ".".join(leaf.path)
-        is_masked = i in masks
-        marker = "  🎯" if is_masked else ""
+    from data.functions.registry import FUNC_NAME_KEYS
+    
+    # 将 leaves 分为 useful (与 mask 属于同一 group) 和 useless (distractors)
+    masked_group_ids = set()
+    for idx in masks.keys():
+        masked_group_ids.update(leaves[idx].group_ids)
         
+    useful_indices = []
+    useless_indices = []
+    for i, l in enumerate(leaves):
+        if set(l.group_ids) & masked_group_ids or not masked_group_ids:
+            # 如果没有 group (极简情况) 或者匹配到了 group
+            useful_indices.append(i)
+        else:
+            useless_indices.append(i)
+
+    def _format_leaf(i, leaf, is_masked):
+        path_str = ".".join(leaf.path[-2:]) if len(leaf.path) > 2 else ".".join(leaf.path)
+        marker = "  🎯" if is_masked else ""
         if leaf.value_type == "number":
             val_str = f"{leaf.value:.4g}"
         elif leaf.value_type == "string":
             val_str = f'"{leaf.value[:20]}"' if len(str(leaf.value)) > 20 else f'"{leaf.value}"'
-        elif leaf.value_type == "boolean":
-            val_str = str(leaf.value)
         else:
-            val_str = leaf.value
+            val_str = str(leaf.value)
+        return f"    [{i:3d}] {path_str:30s} = {val_str:15s} ({leaf.value_type}){marker}"
+
+    print(f"  🟢 Useful Leaves (associated with masks) ({len(useful_indices)} tokens):")
+    for i in useful_indices:
+        print(_format_leaf(i, leaves[i], i in masks))
         
-        # 只打印前 15 个 + 被 mask 的
-        if i < 15 or is_masked:
-            print(f"    [{i:3d}] {path_str:30s} = {val_str:15s} ({leaf.value_type}){marker}")
-        elif i == 15:
-            print(f"    ... ({len(leaves) - 15} more tokens)")
-    
+    if useless_indices:
+        print(f"  🔴 Distractor Leaves ({len(useless_indices)} tokens):")
+        for i in useless_indices[:5]:
+            print(_format_leaf(i, leaves[i], False))
+        if len(useless_indices) > 5:
+            print(f"    ... ({len(useless_indices) - 5} more distractor tokens)")
+            
+    # 智能推断函数上下文的辅助函数
+    def _find_func_context_and_args(target_leaf, target_idx):
+        target_group = set(target_leaf.group_ids)
+        
+        # 收集在同一个大 group 里的所有节点（同组依赖）
+        siblings = [l for l in leaves if set(l.group_ids) & target_group]
+        # 如果是 Stage 0，没生成有效 group，或者没找到
+        if not siblings:
+            siblings = leaves
+            
+        func_name = "implicit_function"
+        args = []
+        
+        for l in siblings:
+            idx = leaves.index(l)
+            path_key = l.path[-1].lower()
+            if l.value_type == "string" and path_key in FUNC_NAME_KEYS:
+                func_name = str(l.value)
+            elif idx != target_idx and path_key not in ["category", "id", "timestamp", "author", "confidence", "tags", "label", "family", "group"]:
+                args.append(f"[{idx}]")
+                
+        return func_name, args
+
     # 显示 mask 预测 vs 真实值
     print(f"\n  🎯 Masked predictions ({len(masks)} masks):")
     sample_out = out[sample_idx]  # (max_len, d_model)
     
     for idx, (truth_val, truth_type) in masks.items():
         mask_repr = sample_out[idx].unsqueeze(0)
+        orig_leaf = leaves[idx]
+        func_name, args = _find_func_context_and_args(orig_leaf, idx)
+        
+        prefix = f"{func_name}({','.join(args)})=[{idx}]"
         
         if truth_type == "number":
             pred_raw = model.decode_head.predict_number(mask_repr).item()
             truth_f = float(truth_val)
             err = abs(pred_raw - truth_f)
             rel_err = err / (abs(truth_f) + 1e-8)
-            print(f"    [{idx:3d}] number: pred={pred_raw:12.4f}  true={truth_f:12.4f}  "
+            print(f"    {prefix} number: pred={pred_raw:12.4f}  true={truth_f:12.4f}  "
                   f"err={err:.4f} ({rel_err:.1%})")
         elif truth_type == "boolean":
             pred_logit = model.decode_head.predict_boolean(mask_repr).item()
             pred_bool = pred_logit > 0
-            print(f"    [{idx:3d}]   bool: pred={pred_bool} (logit={pred_logit:.3f})  "
+            print(f"    {prefix}   bool: pred={pred_bool} (logit={pred_logit:.3f})  "
                   f"true={truth_val}")
         elif truth_type == "string":
             pred_emb = model.decode_head.predict_string(mask_repr)
             target_emb = model.frozen_lm.encode([truth_val])
             cos_sim = torch.nn.functional.cosine_similarity(pred_emb, target_emb).item()
-            print(f"    [{idx:3d}] string: cos_sim={cos_sim:.4f}  true=\"{truth_val}\"")
+            print(f"    {prefix} string: cos_sim={cos_sim:.4f}  true=\"{truth_val}\"")
     
     print(f"  {'─'*60}\n")
 
@@ -435,8 +478,10 @@ def main():
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
         resume_stage = ckpt.get("stage", None)
-        # 统一为短名: "stage1_explicit" → "stage1"
-        if resume_stage and "stage1" in resume_stage:
+        # 统一为短名: "stage0_simple" → "stage0", "stage1_explicit" → "stage1"
+        if resume_stage and "stage0" in resume_stage:
+            resume_stage = "stage0"
+        elif resume_stage and "stage1" in resume_stage:
             resume_stage = "stage1"
         elif resume_stage and "stage2" in resume_stage:
             resume_stage = "stage2"
@@ -468,14 +513,39 @@ def main():
 
     # 确定要跳过的 stages（resume 时从下一个 stage 开始）
     skip_stages = set()
-    if resume_stage == "stage1":
-        # 从 stage1 checkpoint 恢复 → 重新跑 stage1（权重已加载）
+    if resume_stage == "stage0":
         pass
+    elif resume_stage == "stage1":
+        skip_stages.add("stage0")
     elif resume_stage == "stage2":
-        skip_stages.add("stage1")
+        skip_stages.update(["stage0", "stage1"])
     elif resume_stage == "stage3":
-        skip_stages.add("stage1")
-        skip_stages.add("stage2")
+        skip_stages.update(["stage0", "stage1", "stage2"])
+
+    # ════════════════════════════════════════
+    # Stage 0: 极简预热训练
+    # ════════════════════════════════════════
+    if "stage0" not in skip_stages:
+        log0, global_step = train_stage(
+            model=model,
+            frozen_lm=frozen_lm,
+            stage_name="stage0_simple",
+            train_mode="simple",
+            max_epochs=train_config.stage0_max_epochs,
+            patience=train_config.stage0_patience,
+            dataset_size=train_config.dataset_size,
+            target_tokens=train_config.stage0_target_tokens,
+            distractor_level=train_config.stage0_distractor_level,
+            train_config=train_config,
+            model_config=model_config,
+            writer=writer,
+            global_step=global_step,
+            resume_ckpt=resume_ckpt if resume_stage == "stage0" else None,
+        )
+        save_checkpoint(model, "stage0_final", train_config.checkpoint_dir, log0)
+        all_logs["stage0"] = log0
+    else:
+        print(f"\n  ⏭️  Skipping stage0 (resumed from {resume_stage})")
 
     # ════════════════════════════════════════
     # Stage 1: 显式规则基础训练

@@ -265,8 +265,15 @@ class SyntheticDataset(Dataset):
             else:
                 current_mode = "explicit_long"
 
+        # ── Simple 模式 (Stage 0) ──
+        if current_mode == "simple":
+            rel = FunctionRegistry.sample()
+            doc = TemplateEngine.render_simple(rel)
+            parser = JSONParser()
+            leaves = parser.parse(doc, ["doc"], [])
+            
         # ── In-Context 模式 ──
-        if current_mode == "in_context":
+        elif current_mode == "in_context":
             return generate_in_context_task(
                 target_tokens=self.target_tokens,
                 max_tokens=self.max_tokens,
@@ -274,9 +281,7 @@ class SyntheticDataset(Dataset):
             )
 
         # ── Explicit 模式 ──
-        nested_prob = [0.0, 0.2, 0.5, 0.8][min(self.distractor_level, 3)]
-
-        if self.use_old_generator:
+        elif self.use_old_generator:
             doc1 = generate_synthetic_document_old()
             doc2 = generate_synthetic_document_old()
             parser = JSONParser()
@@ -293,6 +298,7 @@ class SyntheticDataset(Dataset):
 
         else:
             # 标准 explicit 模式 — 按概率选择生成策略
+            nested_prob = [0.0, 0.2, 0.5, 0.8][min(self.distractor_level, 3)]
             r = random.random()
 
             if r < self.text_task_ratio:

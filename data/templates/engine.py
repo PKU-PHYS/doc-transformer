@@ -699,6 +699,15 @@ class TemplateEngine:
         return doc
 
     @staticmethod
+    def render_simple(rel: MathRelation) -> Any:
+        """
+        以最极简的方式渲染 MathRelation。
+        仅使用扁平基础模板，不进行任何动态扰动或嵌套。用于 Stage 0 的极简冷启动预热。
+        """
+        km = _pick_keys(rel)
+        return flat_basic(rel, km)
+
+    @staticmethod
     def render_implicit(rel: MathRelation) -> Any:
         """
         以隐式（不包含函数名）的方式渲染 MathRelation。

@@ -437,14 +437,16 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 为打破 `FrozenLM` 处理大规模深层 JSON 时带来的推理瓶颈（即同一 Batch 的不同节点内大量重复出现如 `"materials"`, `"formula"` 等短语），底层网络引入了两项超前性能优化：
 1. **Batch 级全局词表去重 (Global Token Lookup)**：在每次前向传播的起始阶段 (`TokenEmbedding`)，引擎会主动提取当前 Batch 内所有叶子的字符串值和路径节点，放入 `set` 统一去重。提取出的独一无二的词汇表会被“一次性”送入语言模型，并建立 `text_lookup` 哈希表供后续路径编码和值编码查询，将庞大 Batch 下的大量冗余文本推理开销瞬间清零。
 2. **跨步内存级缓存与防爆机制 (Eviction Policy)**：`FrozenLM` 内部封装了带状态的字典缓存 (`self._cache`)，使跨 Batch 间频繁出现的高频键名永远只需编码一次。同时加入了**自动驱逐清洗机制** (`if len(self._cache) > 10000: self._cache.clear()`)，完美杜绝了持续数万个 Epoch 的海量生僻随机词采样可能引发的 GPU 显存泄漏 (OOM) 崩溃问题。
-
----
-
 ## 八、训练策略与课程学习 (Curriculum Learning)
 
-针对 Zero-shot / In-Context Learning (上下文学习) 规则推断的目标，必须采用**连续预训练（Continued Pre-training）**的课程学习策略，而不是简单的微调（SFT）或一开始就完全混合。这可以有效防止模型产生“捷径依赖（Shortcut Learning）”。
+整个训练过程被设计为四个由易到难的课程阶段，逐步提升任务复杂度与干扰噪声：
 
-### Stage 1：结构与显式规则基础训练（当前阶段）
+### 阶段 0：极简预热训练 (Stage 0 - Simple)
+- **目标**：在没有嵌套、干扰字段和数组等复杂 JSON 结构的理想环境下，使得刚初始化的冷启动模型快速学会最基础的数值傅里叶映射与加减乘除逻辑对应关系。
+- **数据**：固定为全扁平键值对 (如 `{"a": 1, "b": 2, "func": "add", "result": 3}`)。
+- **配置**：`target_tokens=20`, `distractor_level=0`。
+
+### 阶段 1：结构与显式规则基础训练
 - **数据形态**：单条 JSON 或少量 JSON，内部包含显式的物理规律名称（如 `function: "band_gap_formula"`）或参数。
 - **训练目的**：让模型学会理解树状结构、路径编码（Path Encoding）、组嵌入（Group Embedding），以及基础的傅里叶数值计算和跨节点复制寻址。
 - **配置开关**：`train_mode = "explicit"`

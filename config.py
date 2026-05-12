@@ -33,6 +33,8 @@ class TrainConfig:
     
     # 课程学习配置 — 每阶段: max_epochs (上限) + patience (收敛判定)
     # 当连续 patience 个 epoch loss 不下降时，自动进入下一阶段
+    stage0_max_epochs: int = 30     
+    stage0_patience: int = 5        
     stage1_max_epochs: int = 50     # Stage 1 最多跑 50 个 epoch
     stage1_patience: int = 8        # Stage 1 连续 8 epoch 无改善则切换
     stage2_max_epochs: int = 80     # Stage 2 最多跑 80 个 epoch
@@ -42,14 +44,14 @@ class TrainConfig:
     
     dataset_size: int = 10000   # 每个 epoch 的样本数 (464M 模型需要足够数据)
     
+    stage0_target_tokens: int = 20    
     stage1_target_tokens: int = 100   # Stage 1 目标序列长度
     stage2_target_tokens: int = 300   # Stage 2 目标序列长度
     stage3_target_tokens: int = 200   # Stage 3 目标序列长度
     
+    stage0_distractor_level: int = 0  
     stage1_distractor_level: int = 1  # Stage 1 干扰强度 (0-3)
     stage2_distractor_level: int = 2  # Stage 2 干扰强度
     stage3_distractor_level: int = 3  # Stage 3 干扰强度
     
     checkpoint_dir: str = "checkpoints"
-
-

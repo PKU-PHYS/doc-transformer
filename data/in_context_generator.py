@@ -69,25 +69,22 @@ def generate_in_context_task(
     target_rel = gen()
     target_doc = TemplateEngine.render_implicit(target_rel)
 
-    # 4. 构造 final_batch
-    final_batch = {
-        "task_id": str(uuid.uuid4()),
-        "demonstrations": context_jsons,
-        "query": target_doc
-    }
+    # 4. 构造纯数组并列结构 final_batch
+    final_batch = context_jsons + [target_doc]
 
     # 5. 解析为叶子节点
     parser = JSONParser()
-    leaves = parser.parse(final_batch, ["root"], [])
+    leaves = parser.parse(final_batch, ["records"], [])
 
     if max_tokens is not None and len(leaves) > max_tokens:
         leaves = leaves[:max_tokens]
 
-    # 6. 找到 query 里的数值或文本节点并 MASK
+    # 6. 找到数组最后一个元素（相当于原来的 query）里的数值或文本节点并 MASK
     target_masks = {}
+    last_idx_str = f"[{len(final_batch) - 1}]"
     query_indices = [
         i for i, node in enumerate(leaves)
-        if "query" in node.path and node.value_type in ("number", "string") and node.value_type != "mask"
+        if len(node.path) > 1 and node.path[1] == last_idx_str and node.value_type in ("number", "string") and node.value_type != "mask"
     ]
 
     if query_indices:
