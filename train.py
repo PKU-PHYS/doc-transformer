@@ -478,7 +478,7 @@ def main():
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
         resume_stage = ckpt.get("stage", None)
-        # 统一为短名: "stage0_simple" → "stage0", "stage1_explicit" → "stage1"
+        # 统一为短名: "stage0_simple" → "stage0"
         if resume_stage and "stage0" in resume_stage:
             resume_stage = "stage0"
         elif resume_stage and "stage1" in resume_stage:
@@ -548,13 +548,13 @@ def main():
         print(f"\n  ⏭️  Skipping stage0 (resumed from {resume_stage})")
 
     # ════════════════════════════════════════
-    # Stage 1: 显式规则基础训练
+    # Stage 1: 复合与树状结构基础训练
     # ════════════════════════════════════════
     if "stage1" not in skip_stages:
         log1, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
-            stage_name="stage1_explicit",
+            stage_name="stage1_composite",
             train_mode="explicit",
             max_epochs=train_config.stage1_max_epochs,
             patience=train_config.stage1_patience,
@@ -573,14 +573,14 @@ def main():
         print(f"\n  ⏭️  Skipping stage1 (resumed from {resume_stage})")
 
     # ════════════════════════════════════════
-    # Stage 2: In-Context 上下文规则归纳
+    # Stage 2: 抗噪训练 (长文档与干扰字段)
     # ════════════════════════════════════════
     if "stage2" not in skip_stages:
         log2, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
-            stage_name="stage2_in_context",
-            train_mode="in_context",
+            stage_name="stage2_antinoise",
+            train_mode="explicit_long",
             max_epochs=train_config.stage2_max_epochs,
             patience=train_config.stage2_patience,
             dataset_size=train_config.dataset_size,
@@ -598,14 +598,14 @@ def main():
         print(f"\n  ⏭️  Skipping stage2 (resumed from {resume_stage})")
 
     # ════════════════════════════════════════
-    # Stage 3: 混合鲁棒性训练
+    # Stage 3: 上下文规则归纳 (In-Context Learning)
     # ════════════════════════════════════════
     if "stage3" not in skip_stages:
         log3, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
-            stage_name="stage3_mixed",
-            train_mode="mixed",
+            stage_name="stage3_incontext",
+            train_mode="in_context",
             max_epochs=train_config.stage3_max_epochs,
             patience=train_config.stage3_patience,
             dataset_size=train_config.dataset_size,

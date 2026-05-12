@@ -30,6 +30,14 @@ class MathRelation:
 class FunctionRegistry:
     """全局函数注册表。"""
     _generators: List[Callable[[], MathRelation]] = []
+    
+    _current_max_tier: Optional[int] = None
+    _current_exact_tier: Optional[int] = None
+
+    @classmethod
+    def set_filter(cls, max_tier: Optional[int] = None, exact_tier: Optional[int] = None):
+        cls._current_max_tier = max_tier
+        cls._current_exact_tier = exact_tier
 
     @classmethod
     def register(cls, gen_fn: Callable[[], MathRelation]):
@@ -38,13 +46,22 @@ class FunctionRegistry:
 
     @classmethod
     def sample(cls) -> MathRelation:
-        gen = random.choice(cls._generators)
+        gen = cls.sample_generator()
         return gen()
 
     @classmethod
     def sample_generator(cls) -> Callable[[], MathRelation]:
         """返回一个 generator 函数的引用，可多次调用获取同类函数的不同采样。"""
-        return random.choice(cls._generators)
+        gens = cls._generators
+        if cls._current_exact_tier is not None:
+            gens = [g for g in gens if getattr(g, "tier", 1) == cls._current_exact_tier]
+        elif cls._current_max_tier is not None:
+            gens = [g for g in gens if getattr(g, "tier", 1) <= cls._current_max_tier]
+            
+        if not gens:
+            gens = cls._generators # fallback
+            
+        return random.choice(gens)
 
     @classmethod
     def count(cls) -> int:
@@ -127,6 +144,7 @@ def make_unary_generator(
     input_keys: Optional[List[str]] = None,
     output_keys: Optional[List[str]] = None,
     max_retries: int = 20,
+    tier: int = 1,
 ) -> Callable[[], MathRelation]:
     """为单变量函数创建并注册数据生成器。"""
     _in_keys = input_keys or UNARY_INPUT_KEYS
@@ -158,6 +176,7 @@ def make_unary_generator(
             _generator=generator,
         )
 
+    generator.tier = tier
     FunctionRegistry.register(generator)
     return generator
 
@@ -173,6 +192,7 @@ def make_binary_generator(
     input_b_keys: Optional[List[str]] = None,
     output_keys: Optional[List[str]] = None,
     max_retries: int = 20,
+    tier: int = 1,
 ) -> Callable[[], MathRelation]:
     """为双变量函数创建并注册数据生成器。"""
     _a_keys = input_a_keys or BINARY_INPUT_A_KEYS
@@ -205,6 +225,7 @@ def make_binary_generator(
             _generator=generator,
         )
 
+    generator.tier = tier
     FunctionRegistry.register(generator)
     return generator
 

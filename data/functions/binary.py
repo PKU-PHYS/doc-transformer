@@ -8,12 +8,12 @@ from .registry import make_binary_generator
 
 # ─────────────── 基础算术 ───────────────
 
-make_binary_generator("add", ["add", "addition", "sum", "plus", "total"], "arithmetic", lambda a, b: a + b)
-make_binary_generator("subtract", ["subtract", "subtraction", "minus", "difference", "diff"], "arithmetic", lambda a, b: a - b)
-make_binary_generator("multiply", ["multiply", "multiplication", "product", "times", "mul"], "arithmetic", lambda a, b: a * b)
-make_binary_generator("divide", ["divide", "division", "quotient", "ratio", "div"], "arithmetic", lambda a, b: a / b, domain_b=(0.1, 10))
-make_binary_generator("power", ["power", "exponentiation", "pow", "raised_to"], "arithmetic", lambda a, b: a ** b, domain_a=(0.1, 10), domain_b=(0.1, 4))
-make_binary_generator("modulo", ["modulo", "mod", "remainder", "modular"], "arithmetic", lambda a, b: math.fmod(a, b), domain_a=(0, 100), domain_b=(1, 20))
+make_binary_generator("add", ["add", "addition", "sum", "plus", "total"], "arithmetic", lambda a, b: a + b, tier=0)
+make_binary_generator("subtract", ["subtract", "subtraction", "minus", "difference", "diff"], "arithmetic", lambda a, b: a - b, tier=0)
+make_binary_generator("multiply", ["multiply", "multiplication", "product", "times", "mul"], "arithmetic", lambda a, b: a * b, tier=0)
+make_binary_generator("divide", ["divide", "division", "quotient", "ratio", "div"], "arithmetic", lambda a, b: a / b, domain_b=(0.1, 10), tier=0)
+make_binary_generator("power", ["power", "exponentiation", "pow", "raised_to"], "arithmetic", lambda a, b: a ** b, domain_a=(0.1, 10), domain_b=(0.1, 4), tier=0)
+make_binary_generator("modulo", ["modulo", "mod", "remainder", "modular"], "arithmetic", lambda a, b: math.fmod(a, b), domain_a=(0, 100), domain_b=(1, 20), tier=0)
 
 # ─────────────── 对数 ───────────────
 
@@ -23,8 +23,8 @@ make_binary_generator("log_base", ["log_base", "logarithm_base", "log_b", "chang
 
 # ─────────────── 比较 / 选择 ───────────────
 
-make_binary_generator("max", ["max", "maximum", "larger", "greater_of", "max_of"], "comparison", max)
-make_binary_generator("min", ["min", "minimum", "smaller", "lesser_of", "min_of"], "comparison", min)
+make_binary_generator("max", ["max", "maximum", "larger", "greater_of", "max_of"], "comparison", max, tier=0)
+make_binary_generator("min", ["min", "minimum", "smaller", "lesser_of", "min_of"], "comparison", min, tier=0)
 
 # ─────────────── 整数运算 ───────────────
 
@@ -45,7 +45,7 @@ make_binary_generator("atan2", ["atan2", "arctan2", "two_arg_arctan", "angle_of_
 # ─────────────── 统计 ───────────────
 
 make_binary_generator("mean", ["mean", "average", "arithmetic_mean", "avg", "midpoint"],
-                      "statistics", lambda a, b: (a + b) / 2)
+                      "statistics", lambda a, b: (a + b) / 2, tier=0)
 make_binary_generator("geometric_mean", ["geometric_mean", "geo_mean", "geomean"],
                       "statistics", lambda a, b: math.sqrt(a * b),
                       domain_a=(0.01, 50), domain_b=(0.01, 50))

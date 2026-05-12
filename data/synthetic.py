@@ -265,6 +265,12 @@ class SyntheticDataset(Dataset):
             else:
                 current_mode = "explicit_long"
 
+        # 设定函数的难度层级
+        if current_mode == "simple":
+            FunctionRegistry.set_filter(exact_tier=0)
+        else:
+            FunctionRegistry.set_filter(max_tier=1)
+
         # ── Simple 模式 (Stage 0) ──
         if current_mode == "simple":
             rel = FunctionRegistry.sample()
