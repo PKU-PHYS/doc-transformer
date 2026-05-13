@@ -574,14 +574,6 @@ def _make_array_template(inner_template_fn, min_companions=1, max_companions=7):
     return array_template
 
 
-def resample_relation(rel: MathRelation) -> MathRelation:
-    """调用原始 generator 重新采样一条数学正确的关系。"""
-    if rel._generator is not None:
-        return rel._generator()
-    # fallback: 如果没有 generator 引用，返回自身（不应发生）
-    return rel
-
-
 # 注册标准数组模板 (2-8 个元素)
 for _base in [flat_basic, flat_no_func_name, flat_with_id, flat_terse,
               flat_labeled, nested_params_result, nested_io_split,

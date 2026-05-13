@@ -79,7 +79,7 @@ class FunctionRegistry:
 
 FUNC_NAME_KEYS = [
     "function", "func", "fn", "operation", "op", "transform",
-    "method", "mapping", "computation", "operator", "type",
+    "method", "mapping", "computation", "operator", "func_type",
     "kind", "formula_type", "math_op", "procedure", "rule",
 ]
 
@@ -115,7 +115,7 @@ BINARY_OUTPUT_KEYS = [
 
 CATEGORY_KEYS = [
     "category", "family", "group", "class", "domain",
-    "branch", "field", "area", "subject",
+    "branch", "field", "discipline", "subject",
 ]
 
 

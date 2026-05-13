@@ -104,5 +104,6 @@ def _composite_generator():
 
 
 # 注册多个复合生成器实例以增加被选中的权重
+_composite_generator.tier = 1
 for _ in range(5):
     FunctionRegistry.register(_composite_generator)

@@ -11,7 +11,7 @@ import math
 import random
 from .registry import FunctionRegistry, MathRelation
 
-def _register_implicit(name, synonyms, category, var_defs, satisfy):
+def _register_implicit(name, synonyms, category, var_defs, satisfy, tier=1):
     """
     注册一个隐函数。
 
@@ -19,6 +19,7 @@ def _register_implicit(name, synonyms, category, var_defs, satisfy):
     satisfy: callable(partial_vars) -> full_vars
              给定 N-1 个变量的采样值，计算第 N 个使方程成立。
              接收 dict，返回 dict（补全缺失变量）。
+    tier: 难度层级 (0=基础, 1=标准)，默认 1。
     """
     def generator():
         vars_dict = {}
@@ -47,6 +48,7 @@ def _register_implicit(name, synonyms, category, var_defs, satisfy):
             include_func_name=True,
             _generator=generator,
         )
+    generator.tier = tier
     FunctionRegistry.register(generator)
     return generator
 

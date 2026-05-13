@@ -295,11 +295,12 @@ def train_stage(
     )
     
     # BF16 混精度训练 — 提速 ~2x，动态范围与 FP32 相同
+    # BF16 的指数位与 FP32 相同 → 无下溢问题 → 不需要 GradScaler
     use_amp = device == "cuda" and torch.cuda.is_bf16_supported()
     amp_dtype = torch.bfloat16 if use_amp else torch.float32
-    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    scaler = torch.amp.GradScaler('cuda', enabled=False)
     if use_amp:
-        print(f"  ⚡ BF16 mixed precision enabled")
+        print(f"  ⚡ BF16 mixed precision enabled (GradScaler disabled — not needed for BF16)")
 
     # 恢复训练状态
     start_epoch = 0

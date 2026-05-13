@@ -391,7 +391,7 @@ class JSONParser:
    - **文本 → 文本推理** (如输出反函数名称、计算导数表达式配对)
    - **文本 → 数值检索** (如基于自然语言"archimedes_constant"输出 $3.141593$)
    这三类任务直接强制模型将 FrozenLM 的语义向量空间与傅里叶特征的高维数值空间进行深度对齐。
-2. **FunctionRegistry 的 Tier 分级过滤**：每个注册的数学函数都带有 `tier` 属性（0=最简单如加减乘除，1=标准复杂度如三角函数、指数对数等）。在 Stage 0 中通过 `FunctionRegistry.set_filter(exact_tier=0)` 仅使用最简函数冷启动；其他阶段使用 `set_filter(max_tier=1)` 允许全部函数。
+2. **FunctionRegistry 的 Tier 分级过滤**：每个注册的数学函数都带有 `tier` 属性（0=基础函数，含四则运算、基本三角/指数/对数/幂函数、比较函数等共 22 个；1=进阶函数，含反三角、双曲、隐函数、复合函数等）。在 Stage 0 中通过 `FunctionRegistry.set_filter(exact_tier=0)` 仅使用基础函数冷启动；其他阶段使用 `set_filter(max_tier=1)` 允许全部函数。
 3. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它囊括了 4 大类（扁平、嵌套、数组、复合函数专用）约 60 种基础模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**。结合键名同义词池的随机化与后处理变换，有效变体数可达数十万。此外 `render_simple` 方法专为 Stage 0 设计，强制使用最简扁平模板。
 4. **Distractor Injector**：随机向生成的 JSON 中插入完全无关的干扰分支（如 `timestamp`, `confidence` 等），迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点。
 
@@ -431,13 +431,20 @@ def __getitem__(self, idx):
     # 3. 超长截断
     leaves = leaves[:self.max_tokens]
     
-    # 4. "输出优先" Mask 策略
-    #    最后一个数值节点 = 输出变量，优先 mask
-    #    避免 mask 不可逆函数 (max/min/abs/sign) 的输入，消除不可确定的训练噪声
+    # 4. "输出优先" Mask 策略（4 级 fallback）
+    #    利用 TemplateEngine 返回的 safe_mask_keys 精准定位安全目标
+    #    避免 mask 不可逆函数 (max/min/abs/sign) 的输入
     num_indices = [i for i, l in enumerate(leaves) if l.value_type == "number"]
-    output_idx = num_indices[-1]  # 输出变量
-    mask_indices = [output_idx]
-    # 如需更多 mask，从剩余数值节点中选，仍不够则从非数值节点补
+    # P1: TemplateEngine 返回的精确安全键名（当前关系的所有输出同义词）
+    candidates = [i for i in num_indices if leaves[i].path[-1] in safe_mask_keys]
+    # P2 fallback: 全局输出键名集合
+    if not candidates: candidates = [i for i in num_indices if leaves[i].path[-1] in _FALLBACK_OUTPUT_KEYS]
+    # P3 fallback: 所有非装饰性数值节点
+    if not candidates: candidates = [i for i in num_indices if leaves[i].path[-1] not in _DECORATION_KEYS]
+    # P4 fallback: 最后一个数值节点
+    if not candidates: candidates = [num_indices[-1]]
+    mask_indices = random.sample(candidates, min(num_masks, len(candidates)))
+    # 仍需更多 mask 时，从非数值节点补充
     
     return leaves, target_masks
 ```

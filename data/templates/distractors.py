@@ -247,6 +247,27 @@ NESTED_DISTRACTOR_POOL = {
 
 
 # ═══════════════════════════════════════════════════
+# 安全校验：distractor 键名不得与输出变量键名冲突
+# ═══════════════════════════════════════════════════
+
+def _validate_no_output_key_collision():
+    """模块加载时校验 distractor 键名与输出键名无交集。"""
+    from data.functions.registry import UNARY_OUTPUT_KEYS, BINARY_OUTPUT_KEYS
+    output_keys = set(UNARY_OUTPUT_KEYS) | set(BINARY_OUTPUT_KEYS)
+    scalar_overlap = set(DISTRACTOR_POOL.keys()) & output_keys
+    nested_overlap = set(NESTED_DISTRACTOR_POOL.keys()) & output_keys
+    if scalar_overlap or nested_overlap:
+        raise ValueError(
+            f"Distractor 键名与输出变量键名冲突！这会导致干扰字段被误 mask 为预测目标。\n"
+            f"  标量冲突: {scalar_overlap or '无'}\n"
+            f"  嵌套冲突: {nested_overlap or '无'}\n"
+            f"请重命名冲突的 distractor 键名。"
+        )
+
+_validate_no_output_key_collision()
+
+
+# ═══════════════════════════════════════════════════
 # 注入接口
 # ═══════════════════════════════════════════════════
 
