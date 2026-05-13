@@ -7,15 +7,14 @@ class ModelConfig:
     n_heads: int = 16           # XXXL: 注意力头数 (每个头 96 维)
     d_ff: int = 6144            # XXXL: FFN 中间层维度
     dropout: float = 0.1
-    max_depth: int = 10         # Depth Embedding 方案的最大深度支持
     max_tokens: int = 512       # 截断阈值，单样本最大 token 数
     
     # Frozen LM 配置
     frozen_lm_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     frozen_lm_dim: int = 384    
     
-    # 路径编码选择: "gru" 递归 或 "depth" 绝对深度
-    path_encoding: str = "gru"  
+    # Fork Bias 编码维度 (正弦编码 → 可学习投影)
+    fork_bias_encoding_dim: int = 32
     
     # 傅里叶特征 (数值编码用)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128
@@ -25,8 +24,7 @@ class ModelConfig:
     n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
     exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
     
-    # 组嵌入缩放
-    group_scale: float = 0.1    # 随机向量 L2 归一化后的模长 (降低以平衡 val/path 量级)
+
 
 @dataclass
 class TrainConfig:

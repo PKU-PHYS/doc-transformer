@@ -7,9 +7,38 @@ from torch.optim import AdamW
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import ModelConfig
-from model.json_parser import LeafNode
+from model.json_parser import LeafNode, JSONParser
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
+from data.synthetic import compute_fork_bias_indices
+
+def _make_fork_bias(leaves_batch, device):
+    """为测试构建 fork bias 矩阵"""
+    B = len(leaves_batch)
+    max_len = max(len(l) for l in leaves_batch)
+    max_path_len = max(len(leaf.path_ids)
+                       for leaves in leaves_batch for leaf in leaves) if max_len > 0 else 1
+    
+    path_ids_t = torch.zeros(B, max_len, max_path_len, dtype=torch.long)
+    is_group_t = torch.zeros(B, max_len, max_path_len, dtype=torch.long)
+    valid_path_lens_t = torch.zeros(B, max_len, dtype=torch.long)
+    
+    for b, leaves in enumerate(leaves_batch):
+        for i, leaf in enumerate(leaves):
+            L = len(leaf.path_ids)
+            valid_path_lens_t[b, i] = L
+            if L > 0:
+                path_ids_t[b, i, :L] = torch.tensor(leaf.path_ids, dtype=torch.long)
+                is_group_t[b, i, :L] = torch.tensor(leaf.path_types, dtype=torch.long)
+    
+    return compute_fork_bias_indices(path_ids_t, is_group_t, valid_path_lens_t).to(device)
+
+def _leaf(value, value_type, path):
+    """创建带完整新字段的 LeafNode（无数组嵌套的简单叶子）"""
+    path_types = [0] * len(path)  # 全是 Dict Key
+    path_ids = [JSONParser._key_hash(p) for p in path]
+    return LeafNode(value=value, value_type=value_type, path=path,
+                    path_types=path_types, path_ids=path_ids, group_ids=[])
 
 def test_stage1():
     print("=== Stage 1: Zero-Loss Overfit Test ===")
@@ -27,25 +56,21 @@ def test_stage1():
     optimizer = AdamW(model.parameters(), lr=1e-3)
     
     # 固定的单样本
-    # 测试能否在一个固定的输入上过拟合
-    # 输入: {"val1": 1.0, "val2": 2.0, "pred": [MASK]}
-    # 真实值应该是 3.0 (代表某些组合逻辑，只是让模型背下来)
-    
     leaves = [
-        LeafNode(value=1.0, value_type="number", path=["val1"], group_ids=[]),
-        LeafNode(value=2.0, value_type="number", path=["val2"], group_ids=[]),
-        LeafNode(value="[MASK]", value_type="mask", path=["pred"], group_ids=[])
+        _leaf(1.0, "number", ["val1"]),
+        _leaf(2.0, "number", ["val2"]),
+        _leaf("[MASK]", "mask", ["pred"]),
     ]
     
     target_masks = [{2: (3.0, "number")}]
     
-    # padding mask: 全是 False (没有 pad)
     padding_mask = torch.zeros((1, 3), dtype=torch.bool, device=frozen_lm.device)
+    fork_bias = _make_fork_bias([leaves], frozen_lm.device)
     
     model.train()
     for step in range(100):
         optimizer.zero_grad()
-        out = model([leaves], padding_mask)
+        out = model([leaves], padding_mask, fork_bias_indices=fork_bias)
         loss = model.compute_loss(out, [leaves], target_masks)
         
         loss.backward()

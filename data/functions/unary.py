@@ -38,25 +38,25 @@ make_unary_generator("log1p", ["log1p", "log_1_plus_x", "ln_1_plus"], "logarithm
 
 make_unary_generator("sqrt", ["sqrt", "square_root", "root", "radical"], "power", math.sqrt, (0, 1e8), tier=0, log_uniform=True)
 make_unary_generator("cbrt", ["cbrt", "cube_root", "cubic_root", "third_root"], "power", lambda x: math.copysign(abs(x) ** (1/3), x), (-50, 50))
-make_unary_generator("square", ["square", "x_squared", "pow2", "quadratic_mono"], "power", lambda x: x * x, (-1e4, 1e4), tier=0, log_uniform=True)
+make_unary_generator("square", ["square", "x_squared", "pow2", "quadratic_mono"], "power", lambda x: x * x, (-1e4, 1e4), tier=0, log_uniform=True, invertible=False)
 make_unary_generator("cube", ["cube", "x_cubed", "pow3", "cubic_mono"], "power", lambda x: x * x * x, (-5, 5), tier=0)
 make_unary_generator("reciprocal", ["reciprocal", "inverse", "one_over_x", "multiplicative_inverse"], "power", lambda x: 1.0 / x, (1e-4, 1e4), log_uniform=True)
 
 # ─────────────── 激活 / 符号 ───────────────
 
-make_unary_generator("abs", ["abs", "absolute", "absolute_value", "magnitude", "modulus"], "activation", abs, (-10, 10), tier=0)
-make_unary_generator("sign", ["sign", "signum", "sgn", "sign_function"], "activation", lambda x: float((x > 0) - (x < 0)), (-10, 10), tier=0)
+make_unary_generator("abs", ["abs", "absolute", "absolute_value", "magnitude", "modulus"], "activation", abs, (-10, 10), tier=0, invertible=False)
+make_unary_generator("sign", ["sign", "signum", "sgn", "sign_function"], "activation", lambda x: float((x > 0) - (x < 0)), (-10, 10), tier=0, invertible=False)
 make_unary_generator("sigmoid", ["sigmoid", "logistic", "logistic_function", "sigma"], "activation", lambda x: 1.0 / (1.0 + math.exp(-x)), (-10, 10))
-make_unary_generator("relu", ["relu", "rectified_linear", "ramp", "positive_part"], "activation", lambda x: max(0.0, x), (-10, 10))
+make_unary_generator("relu", ["relu", "rectified_linear", "ramp", "positive_part"], "activation", lambda x: max(0.0, x), (-10, 10), invertible=False)
 make_unary_generator("softplus", ["softplus", "smooth_relu", "log_exp_sum"], "activation", lambda x: math.log1p(math.exp(x)) if x < 20 else x, (-10, 10))
-make_unary_generator("heaviside", ["heaviside", "step_function", "unit_step", "theta"], "activation", lambda x: 1.0 if x > 0 else (0.5 if x == 0 else 0.0), (-10, 10))
+make_unary_generator("heaviside", ["heaviside", "step_function", "unit_step", "theta"], "activation", lambda x: 1.0 if x > 0 else (0.5 if x == 0 else 0.0), (-10, 10), invertible=False)
 
 # ─────────────── 取整 ───────────────
 
-make_unary_generator("floor", ["floor", "floor_function", "round_down", "greatest_integer"], "rounding", math.floor, (-10, 10))
-make_unary_generator("ceil", ["ceil", "ceiling", "round_up", "least_integer"], "rounding", math.ceil, (-10, 10))
-make_unary_generator("round", ["round", "round_nearest", "nint", "nearest_integer"], "rounding", lambda x: round(x), (-10, 10))
-make_unary_generator("frac", ["frac", "fractional_part", "decimal_part", "mantissa"], "rounding", lambda x: x - math.floor(x), (-10, 10))
+make_unary_generator("floor", ["floor", "floor_function", "round_down", "greatest_integer"], "rounding", math.floor, (-10, 10), invertible=False)
+make_unary_generator("ceil", ["ceil", "ceiling", "round_up", "least_integer"], "rounding", math.ceil, (-10, 10), invertible=False)
+make_unary_generator("round", ["round", "round_nearest", "nint", "nearest_integer"], "rounding", lambda x: round(x), (-10, 10), invertible=False)
+make_unary_generator("frac", ["frac", "fractional_part", "decimal_part", "mantissa"], "rounding", lambda x: x - math.floor(x), (-10, 10), invertible=False)
 
 # ─────────────── 特殊函数 & 转换 ───────────────
 

@@ -57,7 +57,7 @@ def generate_in_context_task(
     context_jsons = []
     for _ in range(actual_shots):
         companion_rel = gen()
-        doc = TemplateEngine.render_implicit(companion_rel)
+        doc, _, _ = TemplateEngine.render_implicit(companion_rel)
         # 根据干扰等级注入干扰
         if isinstance(doc, dict) and distractor_level > 0:
             n_max = [0, 2, 5, 8][min(distractor_level, 3)]
@@ -66,14 +66,14 @@ def generate_in_context_task(
         context_jsons.append(doc)
 
     target_rel = gen()
-    target_doc = TemplateEngine.render_implicit(target_rel)
+    target_doc, _, _ = TemplateEngine.render_implicit(target_rel)
 
     # 4. 构造纯数组并列结构 final_batch
     final_batch = context_jsons + [target_doc]
 
     # 5. 解析为叶子节点
     parser = JSONParser()
-    leaves = parser.parse(final_batch, ["records"], [])
+    leaves = parser.parse(final_batch, ["records"], [0], [JSONParser._key_hash("records")], [])
 
     if max_tokens is not None and len(leaves) > max_tokens:
         leaves = leaves[:max_tokens]
@@ -107,6 +107,8 @@ def generate_in_context_task(
             value="[MASK]",
             value_type="mask",
             path=orig_node.path,
+            path_types=orig_node.path_types,
+            path_ids=orig_node.path_ids,
             group_ids=orig_node.group_ids
         )
 

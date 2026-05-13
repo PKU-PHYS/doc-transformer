@@ -364,13 +364,14 @@ def train_stage(
         epoch_loss = 0.0
         n_batches = 0
 
-        for batch_idx, (batched_leaves, batched_masks, padding_mask) in enumerate(loader):
+        for batch_idx, (batched_leaves, batched_masks, padding_mask, fork_bias_indices) in enumerate(loader):
             padding_mask = padding_mask.to(device)
+            fork_bias_indices = fork_bias_indices.to(device)
 
             optimizer.zero_grad()
             
             with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-                out = model(batched_leaves, padding_mask)
+                out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
                 loss = model.compute_loss(out, batched_leaves, batched_masks)
 
             scaler.scale(loss).backward()

@@ -13,7 +13,7 @@ make_binary_generator("subtract", ["subtract", "subtraction", "minus", "differen
 make_binary_generator("multiply", ["multiply", "multiplication", "product", "times", "mul"], "arithmetic", lambda a, b: a * b, domain_a=(-1e4, 1e4), domain_b=(-1e4, 1e4), tier=0, log_uniform=True)
 make_binary_generator("divide", ["divide", "division", "quotient", "ratio", "div"], "arithmetic", lambda a, b: a / b, domain_a=(-1e4, 1e4), domain_b=(0.1, 1e4), tier=0, log_uniform=True)
 make_binary_generator("power", ["power", "exponentiation", "pow", "raised_to"], "arithmetic", lambda a, b: a ** b, domain_a=(0.1, 100), domain_b=(0.1, 4), tier=0, log_uniform=True)
-make_binary_generator("modulo", ["modulo", "mod", "remainder", "modular"], "arithmetic", lambda a, b: math.fmod(a, b), domain_a=(0, 1e4), domain_b=(1, 1e3), tier=0, log_uniform=True)
+make_binary_generator("modulo", ["modulo", "mod", "remainder", "modular"], "arithmetic", lambda a, b: math.fmod(a, b), domain_a=(0, 1e4), domain_b=(1, 1e3), tier=0, log_uniform=True, invertible=False)
 
 # ─────────────── 对数 ───────────────
 
@@ -23,22 +23,22 @@ make_binary_generator("log_base", ["log_base", "logarithm_base", "log_b", "chang
 
 # ─────────────── 比较 / 选择 ───────────────
 
-make_binary_generator("max", ["max", "maximum", "larger", "greater_of", "max_of"], "comparison", max, domain_a=(-1e4, 1e4), domain_b=(-1e4, 1e4), tier=0, log_uniform=True)
-make_binary_generator("min", ["min", "minimum", "smaller", "lesser_of", "min_of"], "comparison", min, domain_a=(-1e4, 1e4), domain_b=(-1e4, 1e4), tier=0, log_uniform=True)
+make_binary_generator("max", ["max", "maximum", "larger", "greater_of", "max_of"], "comparison", max, domain_a=(-1e4, 1e4), domain_b=(-1e4, 1e4), tier=0, log_uniform=True, invertible=False)
+make_binary_generator("min", ["min", "minimum", "smaller", "lesser_of", "min_of"], "comparison", min, domain_a=(-1e4, 1e4), domain_b=(-1e4, 1e4), tier=0, log_uniform=True, invertible=False)
 
 # ─────────────── 整数运算 ───────────────
 
 make_binary_generator("gcd", ["gcd", "greatest_common_divisor", "hcf", "highest_common_factor"],
                       "integer", lambda a, b: float(math.gcd(int(a), int(b))),
-                      domain_a=(1, 100), domain_b=(1, 100))
+                      domain_a=(1, 100), domain_b=(1, 100), invertible=False)
 make_binary_generator("lcm", ["lcm", "least_common_multiple", "lowest_common_multiple"],
                       "integer", lambda a, b: float(abs(int(a) * int(b)) // math.gcd(int(a), int(b))),
-                      domain_a=(1, 50), domain_b=(1, 50))
+                      domain_a=(1, 50), domain_b=(1, 50), invertible=False)
 
 # ─────────────── 三角 ───────────────
 
 make_binary_generator("hypot", ["hypot", "hypotenuse", "pythagorean_sum", "euclidean_norm_2d"],
-                      "trigonometric", math.hypot, domain_a=(-10, 10), domain_b=(-10, 10))
+                      "trigonometric", math.hypot, domain_a=(-10, 10), domain_b=(-10, 10), invertible=False)
 make_binary_generator("atan2", ["atan2", "arctan2", "two_arg_arctan", "angle_of_vector"],
                       "trigonometric", math.atan2, domain_a=(-10, 10), domain_b=(-10, 10))
 
@@ -53,12 +53,12 @@ make_binary_generator("harmonic_mean", ["harmonic_mean", "harm_mean", "reciproca
                       "statistics", lambda a, b: 2 * a * b / (a + b),
                       domain_a=(0.1, 50), domain_b=(0.1, 50))
 make_binary_generator("rms", ["rms", "root_mean_square", "quadratic_mean"],
-                      "statistics", lambda a, b: math.sqrt((a*a + b*b) / 2))
+                      "statistics", lambda a, b: math.sqrt((a*a + b*b) / 2), invertible=False)
 
 # ─────────────── 距离 ───────────────
 
 make_binary_generator("abs_diff", ["abs_diff", "absolute_difference", "distance_1d", "gap"],
-                      "distance", lambda a, b: abs(a - b))
+                      "distance", lambda a, b: abs(a - b), invertible=False)
 
 # ─────────────── 百分比 ───────────────
 

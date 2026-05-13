@@ -23,10 +23,12 @@ class DocumentTransformer(nn.Module):
 
     def forward(self, 
                 batched_leaves: List[List[LeafNode]], 
-                padding_mask: Tensor) -> Tensor:
+                padding_mask: Tensor,
+                fork_bias_indices: Tensor = None) -> Tensor:
         """
         batched_leaves: batch 中每个样本的叶子节点列表
         padding_mask: (B, max_len)
+        fork_bias_indices: (B, max_len, max_len) fork level 矩阵
         """
         B = len(batched_leaves)
         device = padding_mask.device
@@ -53,7 +55,8 @@ class DocumentTransformer(nn.Module):
                     x_emb[b, :count, :] = all_embs[start:start + count]
                 
         # Transformer 主干在外层 autocast 下运行
-        out = self.transformer(x_emb, padding_mask=padding_mask)
+        out = self.transformer(x_emb, padding_mask=padding_mask,
+                               fork_bias_indices=fork_bias_indices)
         return out
         
     def compute_loss(self, 

@@ -65,7 +65,8 @@
 ### 2.1 核心思想
 
 > **每个叶子节点 = 一个 token。**
-> **每个 token 的嵌入 = 值编码 + 路径编码 + 组嵌入。**
+> **每个 token 的嵌入 = 值编码 + 路径编码。**
+> **组关系通过 Group-Fork Relative Attention Bias 注入注意力层。**
 > **然后用标准全局双向 Transformer 处理所有 token。**
 
 这三个组成部分各自回答一个问题：
@@ -74,7 +75,7 @@
 |----------|-----------|---------|
 | **值编码** | 这个值是什么？（"Fe2O3", 2.1, ...） | 词嵌入（"cat" 的含义） |
 | **路径编码** | 这个值在 JSON 树的哪个位置？ | 位置编码（第 3 个词） |
-| **组嵌入** | 这个值和谁属于同一组？ | BERT 的 segment embedding |
+| **Fork Bias** | 两个值的结构关系如何？（同组/跨组/哪层分叉） | T5 Relative Position Bias |
 
 ### 2.2 路径编码的处理规则
 
@@ -83,10 +84,10 @@ JSON 只有三种结构，每种的路径处理规则如下：
 | JSON 类型 | 路径处理 | 组处理 |
 |-----------|---------|--------|
 | **标量** | 不增加路径层（它是叶子） | — |
-| **对象** `{key: val}` | key **加入**路径 | — |
-| **数组** `[item, ...]` | 数组的字段名**加入**路径，但索引**不加入** | 为同一元素的所有叶子分配**同一个组 ID** |
+| **对象** `{key: val}` | key 加入路径（type=0, id=hash(key)） | — |
+| **数组** `[item, ...]` | 字段名已在路径中；为每个元素插入实例节点（type=1, id=自增） | 实例节点的 id 承载组信息 |
 
-关键规则：**路径中遇到数组时，数组名加入路径（保留层次），数组索引不加入路径（用组嵌入代替，保持置换不变性）。**
+关键规则：**遍历数组时，为每个元素在路径中插入一个实例节点（text=父数组字段名, type=1）。同一元素的所有叶子共享该实例节点的 path_id，fork bias 自动检测分组关系。**
 
 ### 2.3 对例子的解析
 
@@ -124,9 +125,11 @@ JSON 只有三种结构，每种的路径处理规则如下：
 
 ## 三、Token 嵌入的详细构成
 
-每个 token 的最终嵌入（$d$ 维向量）由三项相加：
+每个 token 的最终嵌入（$d$ 维向量）由两项相加：
 
-$$\mathbf{t}_i = \underbrace{\mathbf{v}_i}_{\text{值编码}} + \underbrace{\mathbf{p}_i}_{\text{路径编码}} + \underbrace{\sum_l \mathbf{g}_i^{(l)}}_{\text{各层组嵌入之和}}$$
+$$\mathbf{t}_i = \underbrace{\mathbf{v}_i}_{\text{值编码}} + \underbrace{\mathbf{p}_i}_{\text{路径编码}}$$
+
+组信息通过 **Group-Fork Relative Attention Bias** 直接注入注意力分数（见 §3.3）。
 
 ### 3.1 值编码 $\mathbf{v}_i$
 
@@ -164,34 +167,34 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
 这一设计使模型对数值的"精度"（0.50 vs 0.51）和"量级"（$10^3$ vs $10^{-3}$）获得了**完全解耦**的感知能力。
 
 
-### 3.2 路径编码 $\mathbf{p}_i$（类比 GPT 的位置编码）
+### 3.2 路径编码 $\mathbf{p}_i$：MLP Fusion
 
-路径是一个字段名序列，如 `["materials", "lattice", "a"]`。有两种候选方案：
+路径现在包含字段名节点（type=0）和数组实例节点（type=1）。例如 `["doc"(0), "sites"(0), "sites"(1), "element"(0)]`。
 
-**方案 A：GRU 递归编码（有序，O(L)时间）**
-```
-  h₀ = 零向量 (d维)
-  h₁ = GRU(h₀, FrozenLM("materials"))
-  h₂ = GRU(h₁, FrozenLM("lattice"))
-  h₃ = GRU(h₂, FrozenLM("a"))
-  路径编码 p = h₃  (d维)
-```
+采用 **MLP Fusion** 方案——对每个路径节点，将文本特征、类型嵌入和正弦深度编码三路相加，经 MLP 非线性投影后求和：
 
-**方案 B：绝对深度嵌入（并行，O(1)时间）**
 ```
-  h₁ = Depth_1 + FrozenLM("materials")
-  h₂ = Depth_2 + FrozenLM("lattice")
-  h₃ = Depth_3 + FrozenLM("a")
-  路径编码 p = h₁ + h₂ + h₃  (d维)
+  对路径中每个节点 l (depth=0,1,2,...):
+    fused_l = LayerNorm(FrozenLM(text_l) + TypeEmb(type_l) + SinPE(depth_l))
+    projected_l = MLP(fused_l)     # Linear(frozen_dim, d*2) -> GELU -> Linear(d*2, d)
+  路径编码 p = Σ projected_l       # Masked Sum Pooling（忽略 padding 位置）
 ```
 
-### 3.3 组嵌入 $\mathbf{g}_i^{(l)}$
+**核心优势**：MLP 的非线性在 sum 前打破了加法交换律——不同深度的同一字段名产生不同的 MLP 输出，因此路径顺序敏感（`[a,b]` ≠ `[b,a]`）。正弦 PE 是公式计算，无深度上限。
 
-每遇到一层数组，就为该层生成一个组嵌入。同一数组元素内的所有叶子共享**同一个随机采样的 $d$ 维向量**。
+### 3.3 Group-Fork Relative Attention Bias
 
-为防止随机向量求内积时引发方差波动，采样的随机向量必须经过 L2 归一化：
-`g = random_normal(d); g = g / ||g|| * scale`
-这确保了同组内积为稳定常数 `scale^2`，异组在高维空间几近绝对正交，彻底消除注意力分数的随机噪声污染。
+组信息不再作为嵌入加法项，而是通过 **注意力偏置** 直接注入 Attention Score（类比 T5 的 Relative Position Bias）。
+
+**原理**：对于任意两个叶子节点 (i, j)，比较它们的路径 `path_ids`。找到第一个不匹配的位置，如果该位置双方都是 Array Instance（type=1），则 `fork_level = 到该位置为止的累计 group 数`，否则 `fork_level = 0`。
+
+- fork_level=0：同一元素内（Dict Key 分叉）或完全相同路径 → 无偏置
+- fork_level=N：第 N 层 group 分叉 → 可学习偏置 `proj(sinusoidal(N))`
+
+偏置编码采用 **正弦编码 + 可学习线性投影**，每个注意力头获得独立的标量偏置，支持任意嵌套深度。初始化为零，训练稳定。
+
+> **方案 A（当前实现）**：fork bias 通过 `src_mask`（3D float tensor `[B*H, S, S]`）注入标准 `nn.TransformerEncoder`，零手写注意力代码。
+> **方案 B（未来备选）**：使用 PyTorch 2.5+ 的 `FlexAttention` + `score_mod` 回调，在 kernel 内部 on-the-fly 计算偏置，避免实例化 `[B, S, S]` 矩阵，内存效率更高。需配合 `torch.compile`。
 
 ---
 
@@ -227,10 +230,9 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
 │   ├── json_parser.py             # JSON 递归解析算法 -> List[LeafNode]
 │   ├── frozen_lm.py               # 冻结句子模型包装与缓存机制
 │   ├── value_encoder.py           # 值编码器（Base-2 frexp 尾数傅里叶 + 指数嵌入/文本/布尔/MASK）
-│   ├── path_encoder.py            # 路径编码器（GRU/Depth Embedding 双方案）
-│   ├── group_embedding.py         # 动态随机组嵌入生成与 L2 归一化
-│   ├── token_embedding.py         # 最终 token 嵌入组装 (Value + Path + Group) + Batch 级去重
-│   ├── transformer.py             # 标准双向 Transformer (含 emb_norm + out_norm + Padding Mask)
+│   ├── path_encoder.py            # MLP Fusion 路径编码器（text + type_emb + sinusoidal_depth -> MLP -> sum）
+│   ├── token_embedding.py         # 最终 token 嵌入组装 (Value + Path) + Batch 级去重
+│   ├── transformer.py             # ForkBiasEncoder + 标准双向 Transformer (fork bias 通过 src_mask 注入)
 │   ├── decode_head.py             # 类型特定解码头 (数值/布尔/文本，极小方差初始化)
 │   └── document_transformer.py    # 顶层模型：端到端前向传播与 arcsinh Loss 计算
 ├── tests/
@@ -258,15 +260,14 @@ class ModelConfig:
     n_heads: int = 16           # XXXL: 注意力头数 (每个头 96 维)
     d_ff: int = 6144            # XXXL: FFN 中间层维度
     dropout: float = 0.1
-    max_depth: int = 10         # Depth Embedding 方案的最大深度支持
     max_tokens: int = 512       # 截断阈值，单样本最大 token 数
     
     # Frozen LM 配置
     frozen_lm_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     frozen_lm_dim: int = 384    
     
-    # 路径编码选择: "gru" 递归 或 "depth" 绝对深度
-    path_encoding: str = "gru"  
+    # Fork Bias 编码维度 (正弦编码 → 可学习投影)
+    fork_bias_encoding_dim: int = 32
     
     # 傅里叶特征 (数值编码用，仅作用于 Base-2 尾数 M)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128
@@ -275,9 +276,6 @@ class ModelConfig:
     # 科学计数法解构 (Mantissa-Exponent Split)
     n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
     exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
-    
-    # 组嵌入缩放
-    group_scale: float = 0.1    # 随机向量 L2 归一化后的模长 (降低以平衡 val/path 量级)
 
 @dataclass
 class TrainConfig:
@@ -340,39 +338,46 @@ from typing import Any, List
 class LeafNode:
     value: Any              # 原始值 (如 2.1, "TiO2", True)
     value_type: str         # 枚举: "number", "string", "boolean", "mask"
-    path: List[str]         # 根到叶子的字段名列表, e.g., ["materials", "lattice", "a"]
-    group_ids: List[int]    # 祖先数组元素对应的全局唯一组 ID, e.g., [14, 52]
+    path: List[str]         # 根到叶子的文本标签序列（含实例节点）
+    path_types: List[int]   # 每个路径节点的类型: 0=Dict Key, 1=Array Instance
+    path_ids: List[int]     # 每个路径节点的唯一 ID (dict key: hash, array instance: 自增)
+    group_ids: List[int]    # 祖先数组元素对应的全局唯一组 ID（兼容旧代码）
 
 class JSONParser:
     def __init__(self):
         # 实例级计数器，确保多进程 DataLoader (num_workers>0) 下不发生状态冲突
         self.group_counter = 0
+    
+    @staticmethod
+    def _key_hash(key: str) -> int:
+        return (hash(key) & 0x7FFFFFFF) + 1_000_000  # 偏移避免与 instance ID 冲突
         
-    def parse(self, data: Any, current_path: List[str], current_groups: List[int]) -> List[LeafNode]:
+    def parse(self, data, current_path, current_path_types, current_path_ids, current_groups):
         if isinstance(data, bool):
-            return [LeafNode(value=data, value_type="boolean", path=current_path, group_ids=current_groups)]
-        elif isinstance(data, (int, float)):
-            return [LeafNode(value=data, value_type="number", path=current_path, group_ids=current_groups)]
-        elif isinstance(data, str):
-            if data == "[MASK]":
-                return [LeafNode(value=data, value_type="mask", path=current_path, group_ids=current_groups)]
-            return [LeafNode(value=data, value_type="string", path=current_path, group_ids=current_groups)]
-        elif data is None:
-            return []  # 忽略 None 值
+            return [LeafNode(value=data, value_type="boolean", path=current_path,
+                             path_types=current_path_types, path_ids=current_path_ids,
+                             group_ids=current_groups)]
+        # ... (int/float/str/None 同理)
             
         elif isinstance(data, dict):
             leaves = []
             for key, val in data.items():
                 new_path = current_path + [str(key)]
-                leaves.extend(self.parse(val, new_path, current_groups))
+                new_types = current_path_types + [0]            # Dict Key
+                new_ids = current_path_ids + [self._key_hash(key)]
+                leaves.extend(self.parse(val, new_path, new_types, new_ids, current_groups))
             return leaves
             
         elif isinstance(data, list):
             leaves = []
+            parent_name = current_path[-1] if current_path else "array"
             for item in data:
                 self.group_counter += 1
+                new_path = current_path + [parent_name]         # 复用父数组字段名
+                new_types = current_path_types + [1]            # Array Instance
+                new_ids = current_path_ids + [self.group_counter]
                 new_groups = current_groups + [self.group_counter]
-                leaves.extend(self.parse(item, current_path, new_groups))
+                leaves.extend(self.parse(item, new_path, new_types, new_ids, new_groups))
             return leaves
 ```
 
@@ -387,7 +392,7 @@ class JSONParser:
    - **文本 → 数值检索** (如基于自然语言"archimedes_constant"输出 $3.141593$)
    这三类任务直接强制模型将 FrozenLM 的语义向量空间与傅里叶特征的高维数值空间进行深度对齐。
 2. **FunctionRegistry 的 Tier 分级过滤**：每个注册的数学函数都带有 `tier` 属性（0=最简单如加减乘除，1=标准复杂度如三角函数、指数对数等）。在 Stage 0 中通过 `FunctionRegistry.set_filter(exact_tier=0)` 仅使用最简函数冷启动；其他阶段使用 `set_filter(max_tier=1)` 允许全部函数。
-3. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它囊括了 4 大类（扁平、嵌套、数组、复合函数专用）约 60 种基础模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**，如全随机打乱字典键的顺序 (`_shuffle_dict`) 或概率性展平单层嵌套，极大化结构多样性，彻底破坏模型对固定 JSON 格式产生"位置捷径过拟合"的可能。结合键名同义词池的随机化与后处理变换，有效变体数可达数十万。此外 `render_simple` 方法专为 Stage 0 设计，强制使用最简扁平模板。
+3. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它囊括了 4 大类（扁平、嵌套、数组、复合函数专用）约 60 种基础模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**。结合键名同义词池的随机化与后处理变换，有效变体数可达数十万。此外 `render_simple` 方法专为 Stage 0 设计，强制使用最简扁平模板。
 4. **Distractor Injector**：随机向生成的 JSON 中插入完全无关的干扰分支（如 `timestamp`, `confidence` 等），迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点。
 
 **数据流伪代码**：
@@ -421,7 +426,7 @@ def __getitem__(self, idx):
     
     # 2. 解析成叶子节点序列
     parser = JSONParser()
-    leaves = parser.parse(doc, ["doc"], [])
+    leaves = parser.parse(doc, ["doc"], [0], [JSONParser._key_hash("doc")], [])
     
     # 3. 超长截断
     leaves = leaves[:self.max_tokens]
@@ -491,36 +496,40 @@ class ValueEncoder(nn.Module):
             out[num_indices] = m_emb + e_emb  # 直接相加
 ```
 
-### 7.2 组嵌入 (`model/group_embedding.py`)
+### 7.2 Group-Fork Relative Attention Bias (`model/transformer.py`)
 
 ```python
-def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, scale: float, device: str) -> Tensor:
-    unique_ids = set(gid for gids in group_ids_list for gid in gids)
+class ForkBiasEncoder(nn.Module):
+    """正弦编码 + 可学习投影 → per-head 注意力偏置，支持任意嵌套深度"""
+    def __init__(self, num_heads, encoding_dim=32):
+        self.proj = nn.Linear(encoding_dim, num_heads)
+        nn.init.zeros_(self.proj.weight)  # 初始偏置 ≈ 0
+        nn.init.zeros_(self.proj.bias)
     
-    random_vecs = {}
-    for uid in unique_ids:
-        vec = torch.randn(d_model, device=device)
-        # 必须放大到 sqrt(d_model) 量级以保证方差不坍缩
-        random_vecs[uid] = (vec / vec.norm(p=2)) * scale * (d_model ** 0.5)
-        
-    embeddings = []
-    for gids in group_ids_list:
-        if not gids:
-            embeddings.append(torch.zeros(d_model, device=device))
-        else:
-            sum_vec = sum(random_vecs[gid] for gid in gids)
-            embeddings.append(sum_vec)
-            
-    return torch.stack(embeddings) # shape: (N, d_model)
+    def forward(self, fork_levels):  # [B, S, S] int
+        pe = sinusoidal_encode(fork_levels)  # [B, S, S, encoding_dim]
+        bias = self.proj(pe)                  # [B, S, S, num_heads]
+        bias = bias.masked_fill(fork_levels.unsqueeze(-1) == 0, 0.0)  # level=0 → 0
+        return bias.permute(0, 3, 1, 2).reshape(B * H, S, S)  # [B*H, S, S]
+```
+
+向量化分叉检测（在 `collate_fn` 中 CPU 计算）：
+```python
+def compute_fork_bias_indices(path_ids, is_group, valid_path_lens):
+    # 1. 逐元素比对路径 → match_matrix [B, S, S, L]
+    # 2. 找第一个不匹配位置 → first_mismatch_idx [B, S, S]
+    # 3. 检查该位置是否双方均为 Array Instance → diverged_at_group
+    # 4. 计算累计 group 数 → fork_level
+    return where(~all_match & diverged_at_group, fork_level, 0)
 ```
 
 ### 7.3 主干网络与解码头
 
-**主干网络**直接调用 `torch.nn.TransformerEncoder`，设置 `norm_first=True`, `batch_first=True`，并传入 `src_key_padding_mask=Padding_Mask` 阻断 `<PAD>` 节点的注意力。
+**主干网络**直接调用 `torch.nn.TransformerEncoder`，设置 `norm_first=True`, `batch_first=True`。Fork bias 和 padding mask 都以 float 形式合并为单一的 `src_mask`（`[B*H, S, S]`），通过 `encoder(x, mask=src_mask)` 传入。padding 位置赋 `-1e9`（等效 $-\infty$），fork bias 为可学习偏置值。
 
 > [!WARNING]
-> **PyTorch Padding Mask 布尔逻辑陷阱**：
-> 在 `src_key_padding_mask` 中，**`True` 表示“这是垃圾填充，请忽略（赋 $-\infty$）”**，**`False` 表示“这是有效数据，请计算”**。这与普通直觉完全相反！在 `collate_fn` 生成该矩阵时切勿填反，否则网络只会对着全 `<PAD>` 的张量算 Attention，第一步 Loss 就会变成 `NaN`。
+> **Padding Mask 合并注意事项**：
+> 不再单独传 `src_key_padding_mask`，而是将 padding 信息（bool → float × -1e9）与 fork bias 合并为统一的 float `src_mask`。这避免了 PyTorch 对 bool mask 和 float mask 类型不匹配的 warning。
 
 **解码头**仅提取被掩码节点的向量：
 - **数值型预测**：`pred_val = Linear(d_model -> 1)(h_mask).squeeze()`，在 **arcsinh 压缩空间**中使用 `HuberLoss`（即 `HuberLoss(arcsinh(pred), arcsinh(target))`）。arcsinh 变换消除了极端数值（如 $10^4$）带来的梯度方差爆炸，使模型对大数值和小数值同等敏感。
@@ -532,6 +541,8 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 1. **Batch 级全局词表去重 (Global Token Lookup)**：在每次前向传播的起始阶段 (`TokenEmbedding`)，引擎会主动提取当前 Batch 内所有叶子的字符串值和路径节点，放入 `set` 统一去重。提取出的独一无二的词汇表会被“一次性”送入语言模型，并建立 `text_lookup` 哈希表供后续路径编码和值编码查询，将庞大 Batch 下的大量冗余文本推理开销瞬间清零。
 2. **跨步内存级缓存与防爆机制 (Eviction Policy)**：`FrozenLM` 内部封装了带状态的字典缓存 (`self._cache`)，使跨 Batch 间频繁出现的高频键名永远只需编码一次。同时加入了**自动驱逐清洗机制** (`if len(self._cache) > 10000: self._cache.clear()`)，完美杜绝了持续数万个 Epoch 的海量生僻随机词采样可能引发的 GPU 显存泄漏 (OOM) 崩溃问题。
 3. **Batch 级展平优化 (Batch Flattening)**：`DocumentTransformer.forward()` 在嵌入阶段会先将整个 Batch 的 leaves 展平为一个大列表，单次调用 `TokenEmbedding` 处理所有 leaves（内部已按类型分组批量化），然后 scatter 回 `(B, max_len, d_model)`。嵌入阶段关闭 `autocast` 以避免手动张量赋值与 BF16 的不兼容问题。
+4. **Fork Bias 计算**：`collate_fn` 在 CPU 上批量提取 `path_ids` 和 `path_types`，调用 `compute_fork_bias_indices()` 向量化计算 fork level 矩阵（O(B*S^2*L)），与叶子节点和 padding mask 一起返回。训练循环中移至 GPU 后传入 `model.forward()`。
+
 ## 八、训练策略与课程学习 (Curriculum Learning)
 
 整个训练过程被设计为四个由易到难的课程阶段，逐步提升任务复杂度与干扰噪声：
@@ -544,7 +555,7 @@ def generate_group_embeddings(group_ids_list: List[List[int]], d_model: int, sca
 ### 阶段 1：复合与树状结构基础训练 (Stage 1 - Composite)
 - **切换时机**：Stage 0 的 Loss 趋于收敛（patience 触发）。
 - **数据形态**：单条或多条数学关系打包的 JSON 文档，包含嵌套结构（如 `{params: {...}, result: val}`）、复合文档（多条关系打包为子对象）、数组文档（多个同结构对象组成的 JSON 数组）和文本推理任务，内部包含显式的函数名称字段（如 `function: "sin"`）。
-- **训练目的**：让模型在 Stage 0 的数值基础上，进一步学会理解树状结构、路径编码（Path Encoding）、组嵌入（Group Embedding），以及跨节点复制寻址。
+- **训练目的**：让模型在 Stage 0 的数值基础上，进一步学会理解树状结构、MLP 路径编码和 Fork Bias 引导的跨组注意力。
 - **配置**：`train_mode="explicit"`, `target_tokens=60`, `distractor_level=0`。
 - **函数过滤**：`FunctionRegistry.set_filter(max_tier=1)`，允许 Tier 0 和 Tier 1 函数。
 
@@ -591,9 +602,9 @@ def generate_in_context_task(target_tokens=None, max_tokens=512, distractor_leve
     final_batch = context_jsons + [target_doc]
     
     # 5. 解析并 Mask 最后一个元素的数值/字符串节点
-    leaves = JSONParser().parse(final_batch, ["records"], [])
+    parser = JSONParser()
+    leaves = parser.parse(final_batch, ["records"], [0], [JSONParser._key_hash("records")], [])
     # 通过 group_ids 定位 query（数组最后一个元素的所有叶子共享同一 group_id）
-    # 注意：JSONParser 不会将数组索引加入路径（§2.2 核心规则），因此只能通过 group_ids 区分
     last_group_id = leaves[-1].group_ids[0] if leaves and leaves[-1].group_ids else None
     if last_group_id is not None:
         query_indices = [i for i, node in enumerate(leaves)
@@ -622,8 +633,8 @@ def generate_in_context_task(target_tokens=None, max_tokens=512, distractor_leve
 1. **Step 级学习率预热 (Warmup)**：绝对禁止大模型直接以 `1e-4` 等高学习率冷启动。使用 `get_cosine_schedule_with_warmup`，预热步数为 `min(625, total_steps // 10)`（约 10% 或固定上限 625 步，防止长阶段过度预热）。`scheduler.step()` 在每个 Batch 结束后执行，实现细粒度平滑过渡。
 2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重必须用极小的方差（如 `std=0.001`）初始化，偏置设为 `0.0`。这迫使大模型在训练初期的盲目猜测阶段输出接近 `0` 的保守数值，避免巨大误差带来的毁灭性梯度惩罚，为主干网络争取建立注意力几何的时间。此外，为全面保障各类目标的预测稳定性，布尔分类头 (`bool_head`) 和文本匹配头 (`text_head`) 的权重也应当应用较小的方差（如 `std=0.01`）进行初始化约束。
 3. **消除傅里叶特征的高频混叠**：由于 Base-2 frexp 解构后尾数 $M \in [-1, 1]$ 已天然归一化，傅里叶频率初始化为 $10^{[-1, 2]}$ 的对数均匀分布即可覆盖从宏观趋势（0.1）到微观精度（100）的全部特征尺度。量级信息由指数嵌入表 `exponent_embed` 独立处理，彻底消除了大数值混叠问题。
-4. **防止组嵌入（Group Embedding）方差坍缩**：为求内积稳定，强行将高维向量的 L2 范数归一化为 1.0 会导致其内部元素的方差坍缩至 $1/d_{model}$（接近 0）。能量过弱会使 Transformer 完全忽视结构组嵌入，导致数组内原本不同的元素无法被有效区分。必须在归一化后乘以 $\sqrt{d_{model}}$，将方差恢复至正常的 `1.0` 尺度。
-5. **嵌入层独立归一化 (Embedding LayerNorm)**：当主干 Transformer 使用 `norm_first=True` (Pre-LN) 时，第一层的 LayerNorm 是作用在注意力的分支上，而残差主干（Residual Stream）在初始阶段未受任何归一化约束。由于最终的 Token 嵌入是值、路径、组嵌入之和，存在极大的初始方差累积。必须在传入 `TransformerEncoder` 前额外应用一个全局的 `nn.LayerNorm(d_model)`（代码中为 `GlobalTransformer.emb_norm`），彻底截断残差流初始的巨大方差膨胀，避免损失爆炸。此外，Transformer 输出后还加了一层 `out_norm = nn.LayerNorm(d_model)` 用于稳定解码头的输入分布。
+4. **Fork Bias 零初始化**：`ForkBiasEncoder` 的投影层权重和偏置初始化为零，确保训练初期注意力分数不受未学习偏置的干扰。随训练推进，模型逐渐学会对不同 fork level 施加恰当的偏置。
+5. **嵌入层独立归一化 (Embedding LayerNorm)**：当主干 Transformer 使用 `norm_first=True` (Pre-LN) 时，第一层的 LayerNorm 是作用在注意力的分支上，而残差主干（Residual Stream）在初始阶段未受任何归一化约束。由于最终的 Token 嵌入是值和路径编码之和，存在初始方差累积。必须在传入 `TransformerEncoder` 前额外应用一个全局的 `nn.LayerNorm(d_model)`（代码中为 `GlobalTransformer.emb_norm`），截断残差流初始的方差膨胀。此外，Transformer 输出后还加了一层 `out_norm = nn.LayerNorm(d_model)` 用于稳定解码头的输入分布。
 6. **全局梯度范数裁剪 (Gradient Clipping)**：在每个训练步的 `scaler.unscale_()` 之后、`scaler.step()` 之前，对全部参数执行 `clip_grad_norm_(max_norm=1.0)`。这是防止偶发的极端样本（如指数函数产生的大数值）导致单步梯度爆炸、破坏已学习注意力几何的最后一道防线。裁剪后的梯度范数同时被记录至 TensorBoard (`grad_norm`)，用于诊断训练是否处于稳定区间。
 
 ### 8.5 自动化课程学习调度与工程化加速
@@ -637,20 +648,25 @@ def generate_in_context_task(target_tokens=None, max_tokens=512, distractor_leve
 
 ## 九、验证计划 (Sanity Check)
 
-**强制执行**以下三阶段测试，任何阶段失败禁止进入下一阶段：
+**强制执行**以下三阶段测试，任何阶段失败禁止进入下一阶段。
+
+> [!NOTE]
+> 三个测试均使用**缩小版模型** (`d_model=128, n_layers=2, n_heads=4, d_ff=256`) 以保证在数秒内完成。
+> 通过阈值相应放宽，仅验证逻辑正确性（嵌入→注意力→解码通路是否打通），不验证大模型学习能力。
 
 ### 阶段 1：单样本过拟合测试 (`test_stage1_overfit.py`)
 - **操作**：死循环只喂 1 条固定字典，如 `{"val1": 1.0, "val2": 2.0, "pred": [MASK]}` (GT=3.0)。不经过 collate 的 batching，没有 pad。
-- **断言判断**：100 step 内，预测误差 `|pred - 3.0| < 1e-4` 且 Loss 单调下降。
+- **断言判断**：100 step 内，Loss < 1e-4（在 arcsinh 压缩空间下，等效于原始误差极小）。
 
 ### 阶段 2：寻址与复制测试 (`test_stage2_copy.py`)
 - **操作**：动态生成 N 条字典，如 `{"source": {"id": "Fe", "val": RANDOM}, "target": {"id": "Fe", "pred": [MASK]}}`。
 - **任务**：模型学会根据同级的 `id` 相等，去 `source` 把 `val` 原封不动搬到 `pred`。
-- **断言判断**：500 step 后，对全新生成的随机数值复制误差 `< 1e-3`。证明路径和组嵌入真正地引导了 Attention 构建起了正确的空间几何。
+- **断言判断**：2000 step 后，对全新随机数值的平均复制误差 `< 0.25`。证明路径和组嵌入引导了 Attention 构建起正确的空间几何。
 
 ### 阶段 3：Padding & Batch 阻断测试 (`test_stage3_padding.py`)
-- **操作**：将阶段 2 的任务加入到不同长度的数组里，用 `collate_fn` 打包成带 Pad 和 `src_key_padding_mask` 的 Batch Tensor。
-- **断言判断**：Loss 同样必须收敛到趋于 0。证明 `-inf` 被正确应用，没有 Ghost Entanglement。
+- **操作**：将阶段 2 的任务加入到不同长度的数组里，手动构造带 padding mask 的 Batch Tensor。
+- **断言判断**：3000 step 后，带 pad 和不带 pad 的预测误差均 `< 0.4`。证明 `-inf` 被正确应用于行列双向，没有 Ghost Entanglement。
 
 ### 阶段 4：正式训练 (`train.py`)
 在合成数据生成器的无限流下按四阶段课程学习训练：Stage 0 极简预热 → Stage 1 复合结构基础 → Stage 2 抗噪训练 → Stage 3 In-Context 归纳能力。每阶段基于 patience 自动切换，保存 Checkpoint，完成后运行 `inference.py`。
+

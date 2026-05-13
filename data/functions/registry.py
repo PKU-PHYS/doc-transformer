@@ -24,6 +24,7 @@ class MathRelation:
     variables: Dict[str, Any]               # role -> value，如 {"input": 1.5, "output": 0.997}
     var_synonyms: Dict[str, List[str]]      # role -> 键名同义词列表
     include_func_name: bool = True          # 是否在文档中包含函数名字段
+    invertible: bool = True                 # 函数是否可逆（可逆时允许 mask 输入变量）
     _generator: Optional[Callable] = None   # 生成此关系的 generator，用于重采样
 
 
@@ -179,6 +180,7 @@ def make_unary_generator(
     max_retries: int = 20,
     tier: int = 1,
     log_uniform: bool = False,
+    invertible: bool = True,
 ) -> Callable[[], MathRelation]:
     """为单变量函数创建并注册数据生成器。"""
     _in_keys = input_keys or UNARY_INPUT_KEYS
@@ -195,6 +197,7 @@ def make_unary_generator(
                     category=category,
                     variables={"input": round(x, 6), "output": round(y, 6)},
                     var_synonyms={"input": _in_keys, "output": _out_keys},
+                    invertible=invertible,
                     _generator=generator,
                 )
                 return rel
@@ -207,6 +210,7 @@ def make_unary_generator(
             category=category,
             variables={"input": round(x, 6), "output": round(y, 6)},
             var_synonyms={"input": _in_keys, "output": _out_keys},
+            invertible=invertible,
             _generator=generator,
         )
 
@@ -228,6 +232,7 @@ def make_binary_generator(
     max_retries: int = 20,
     tier: int = 1,
     log_uniform: bool = False,
+    invertible: bool = True,
 ) -> Callable[[], MathRelation]:
     """为双变量函数创建并注册数据生成器。"""
     _a_keys = input_a_keys or BINARY_INPUT_A_KEYS
@@ -246,6 +251,7 @@ def make_binary_generator(
                     category=category,
                     variables={"input_a": round(a, 6), "input_b": round(b, 6), "output": round(y, 6)},
                     var_synonyms={"input_a": _a_keys, "input_b": _b_keys, "output": _out_keys},
+                    invertible=invertible,
                     _generator=generator,
                 )
         a = (domain_a[0] + domain_a[1]) / 2
@@ -257,6 +263,7 @@ def make_binary_generator(
             category=category,
             variables={"input_a": round(a, 6), "input_b": round(b, 6), "output": round(y, 6)},
             var_synonyms={"input_a": _a_keys, "input_b": _b_keys, "output": _out_keys},
+            invertible=invertible,
             _generator=generator,
         )
 
@@ -275,6 +282,7 @@ def make_multivar_generator(
     compute: Callable[[Dict[str, float]], float],
     max_retries: int = 20,
     tier: int = 1,
+    invertible: bool = True,
 ) -> Callable[[], MathRelation]:
     """
     为多变量函数创建并注册数据生成器。
@@ -303,6 +311,7 @@ def make_multivar_generator(
                     category=category,
                     variables=variables,
                     var_synonyms=var_syns,
+                    invertible=invertible,
                     _generator=generator,
                 )
         # fallback with midpoints
@@ -318,6 +327,7 @@ def make_multivar_generator(
             category=category,
             variables=variables,
             var_synonyms=var_syns,
+            invertible=invertible,
             _generator=generator,
         )
 

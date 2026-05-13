@@ -684,7 +684,10 @@ class TemplateEngine:
         将一条 MathRelation 渲染为 JSON 可序列化的 dict 或 list。
 
         Returns:
-            dict 或 list，可以直接传给 JSONParser.parse()
+            (doc, safe_mask_keys, unsafe_mask_keys):
+              - doc: dict 或 list，可以直接传给 JSONParser.parse()
+              - safe_mask_keys: set[str]，可安全 mask 的叶子键名集合
+              - unsafe_mask_keys: set[str]，不可逆函数的输入键名（不可 mask）
         """
         km = _pick_keys(rel)
         template = random.choice(_TEMPLATES)
@@ -696,22 +699,64 @@ class TemplateEngine:
         if random.random() < 0.2:
             doc = _post_maybe_flatten_single_nested(doc)
 
-        return doc
+        # 计算安全/不安全 mask 键名集合
+        roles = list(rel.variables.keys())
+        output_role = roles[-1]
+        input_roles = roles[:-1]
+        safe_keys = set()
+        unsafe_keys = set()
+
+        if rel.invertible:
+            # 可逆函数：所有变量键名都安全
+            for syns in rel.var_synonyms.values():
+                safe_keys.update(syns)
+            safe_keys.update(km.values())
+        else:
+            # 不可逆函数：只有输出键名安全，输入键名不安全
+            safe_keys = {km[output_role]}
+            safe_keys.update(rel.var_synonyms[output_role])
+            for role in input_roles:
+                unsafe_keys.update(rel.var_synonyms[role])
+                unsafe_keys.add(km[role])
+
+        return doc, safe_keys, unsafe_keys
 
     @staticmethod
     def render_simple(rel: MathRelation) -> Any:
         """
         以最极简的方式渲染 MathRelation。
         仅使用扁平基础模板，不进行任何动态扰动或嵌套。用于 Stage 0 的极简冷启动预热。
+
+        Returns:
+            (doc, safe_mask_keys, unsafe_mask_keys) 同 render()
         """
         km = _pick_keys(rel)
-        return flat_basic(rel, km)
+        doc = flat_basic(rel, km)
+        roles = list(rel.variables.keys())
+        output_role = roles[-1]
+        input_roles = roles[:-1]
+        safe_keys = set()
+        unsafe_keys = set()
+        if rel.invertible:
+            for syns in rel.var_synonyms.values():
+                safe_keys.update(syns)
+            safe_keys.update(km.values())
+        else:
+            safe_keys = {km[output_role]}
+            safe_keys.update(rel.var_synonyms[output_role])
+            for role in input_roles:
+                unsafe_keys.update(rel.var_synonyms[role])
+                unsafe_keys.add(km[role])
+        return doc, safe_keys, unsafe_keys
 
     @staticmethod
     def render_implicit(rel: MathRelation) -> Any:
         """
         以隐式（不包含函数名）的方式渲染 MathRelation。
         主要用于生成 In-Context Learning 的 demonstrations。
+
+        Returns:
+            (doc, safe_mask_keys) 同 render()
         """
         implicit_rel = MathRelation(
             func_name=rel.func_name,
@@ -720,6 +765,8 @@ class TemplateEngine:
             variables=rel.variables,
             var_synonyms=rel.var_synonyms,
             include_func_name=False,
+            invertible=rel.invertible,
+            _generator=rel._generator,
         )
         return TemplateEngine.render(implicit_rel)
 

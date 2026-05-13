@@ -7,21 +7,21 @@ from torch.optim import AdamW
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import ModelConfig
-from model.json_parser import LeafNode
+from model.json_parser import LeafNode, JSONParser
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
+from tests.test_stage1_overfit import _make_fork_bias, _leaf
 
 def generate_copy_task():
     # 动态生成一条复制任务
-    # source 和 target 在同一个字典中，模型需要根据相等的 id 找出 source 的 val 并复制
     val = random.uniform(0.0, 10.0)
     target_id = random.choice(["Fe", "O", "Ti", "Si"])
     
     leaves = [
-        LeafNode(value=target_id, value_type="string", path=["source", "id"], group_ids=[]),
-        LeafNode(value=val, value_type="number", path=["source", "val"], group_ids=[]),
-        LeafNode(value=target_id, value_type="string", path=["target", "id"], group_ids=[]),
-        LeafNode(value="[MASK]", value_type="mask", path=["target", "pred"], group_ids=[])
+        _leaf(target_id, "string", ["source", "id"]),
+        _leaf(val, "number", ["source", "val"]),
+        _leaf(target_id, "string", ["target", "id"]),
+        _leaf("[MASK]", "mask", ["target", "pred"]),
     ]
     
     target_masks = [{3: (val, "number")}]
@@ -55,9 +55,10 @@ def test_stage2():
             batched_masks.append(target_masks[0])
             
         padding_mask = torch.zeros((batch_size, 4), dtype=torch.bool, device=frozen_lm.device)
+        fork_bias = _make_fork_bias(batched_leaves, frozen_lm.device)
         
         optimizer.zero_grad()
-        out = model(batched_leaves, padding_mask)
+        out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias)
         loss = model.compute_loss(out, batched_leaves, batched_masks)
         
         loss.backward()
@@ -76,7 +77,8 @@ def test_stage2():
         for _ in range(eval_batch):
             leaves, target_masks = generate_copy_task()
             padding_mask = torch.zeros((1, 4), dtype=torch.bool, device=frozen_lm.device)
-            out = model([leaves], padding_mask)
+            fork_bias = _make_fork_bias([leaves], frozen_lm.device)
+            out = model([leaves], padding_mask, fork_bias_indices=fork_bias)
             pred_val = model.decode_head.predict_number(out[0, 3].unsqueeze(0)).item()
             truth_val = target_masks[0][3][0]
             error_sum += abs(pred_val - truth_val)

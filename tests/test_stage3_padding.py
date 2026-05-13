@@ -7,10 +7,11 @@ from torch.optim import AdamW
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import ModelConfig
-from model.json_parser import LeafNode
+from model.json_parser import LeafNode, JSONParser
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from tests.test_stage2_copy import generate_copy_task
+from tests.test_stage1_overfit import _make_fork_bias, _leaf
 
 def test_stage3():
     print("=== Stage 3: Padding Block Test ===")
@@ -42,7 +43,7 @@ def test_stage3():
             leaves, masks = generate_copy_task()
             num_noise = random.randint(0, 5)
             for _ in range(num_noise):
-                leaves.append(LeafNode(value="noise", value_type="string", path=["noise"], group_ids=[]))
+                leaves.append(_leaf("noise", "string", ["noise"]))
             batched_leaves.append(leaves)
             batched_masks.append(masks[0])
             if len(leaves) > max_len:
@@ -51,9 +52,11 @@ def test_stage3():
         padding_mask = torch.ones((batch_size, max_len), dtype=torch.bool, device=frozen_lm.device)
         for b, leaves in enumerate(batched_leaves):
             padding_mask[b, :len(leaves)] = False
+        
+        fork_bias = _make_fork_bias(batched_leaves, frozen_lm.device)
             
         optimizer.zero_grad()
-        out = model(batched_leaves, padding_mask)
+        out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias)
         loss = model.compute_loss(out, batched_leaves, batched_masks)
         
         loss.backward()
@@ -65,13 +68,16 @@ def test_stage3():
     # Evaluation
     model.eval()
     leaves, masks = generate_copy_task()
-    batched_leaves = [leaves, leaves + [LeafNode("noise", "string", ["n"], [])]*10]
+    noise_leaves = [_leaf("noise", "string", ["n"]) for _ in range(10)]
+    batched_leaves = [leaves, leaves + noise_leaves]
     padding_mask = torch.ones((2, 14), dtype=torch.bool, device=frozen_lm.device)
     padding_mask[0, :4] = False
     padding_mask[1, :14] = False
     
+    fork_bias = _make_fork_bias(batched_leaves, frozen_lm.device)
+    
     with torch.no_grad():
-        out = model(batched_leaves, padding_mask)
+        out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias)
         pred_val1 = model.decode_head.predict_number(out[0, 3].unsqueeze(0)).item()
         pred_val2 = model.decode_head.predict_number(out[1, 3].unsqueeze(0)).item()
         truth_val = masks[0][3][0]
