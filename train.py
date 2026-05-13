@@ -192,6 +192,9 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
     def _find_func_context_and_args(target_leaf, target_idx):
         target_group = set(target_leaf.group_ids)
         
+        # 预构建 leaf → index 映射（O(N) 替代 O(N²) 的 list.index()）
+        leaf_to_idx = {id(l): i for i, l in enumerate(leaves)}
+        
         # 收集在同一个大 group 里的所有节点（同组依赖）
         siblings = [l for l in leaves if set(l.group_ids) & target_group]
         # 如果是 Stage 0，没生成有效 group，或者没找到
@@ -202,7 +205,7 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
         args = []
         
         for l in siblings:
-            idx = leaves.index(l)
+            idx = leaf_to_idx[id(l)]
             path_key = l.path[-1].lower()
             if l.value_type == "string" and path_key in FUNC_NAME_KEYS:
                 func_name = str(l.value)

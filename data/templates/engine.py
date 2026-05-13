@@ -173,12 +173,17 @@ def flat_prefixed_keys(rel, km):
 
 @_t
 def flat_numbered_keys(rel, km):
-    """变量用编号键: field_0, field_1, ..."""
+    """变量用编号键: field_0, field_1, ...（输出变量保留 km 键名以确保 safe_keys 可定位）"""
     doc = {}
     if rel.include_func_name:
         doc["field_name"] = _pick_func_name(rel)
+    roles = list(rel.variables.keys())
+    output_role = roles[-1]
     for i, (role, val) in enumerate(rel.variables.items()):
-        doc[f"field_{i}"] = val
+        if role == output_role:
+            doc[km[role]] = val  # 输出变量保留 km 键名
+        else:
+            doc[f"field_{i}"] = val
     return doc
 
 # 更多扁平变体
@@ -196,11 +201,16 @@ def flat_verbose(rel, km):
 
 @_t
 def flat_terse(rel, km):
-    """极简 - 只有变量，用短键名"""
+    """极简 - 短键名，输出变量保留 km 键名以确保 safe_keys 可定位"""
     doc = {}
     shorts = list("abcdefghij")
+    roles = list(rel.variables.keys())
+    output_role = roles[-1]
     for i, (role, val) in enumerate(rel.variables.items()):
-        doc[shorts[i % len(shorts)]] = val
+        if role == output_role:
+            doc[km[role]] = val  # 输出变量保留 km 键名
+        else:
+            doc[shorts[i % len(shorts)]] = val
     return doc
 
 @_t
@@ -651,16 +661,18 @@ def _post_shuffle(doc):
 
 
 def _post_maybe_flatten_single_nested(doc):
-    """有概率将只有一个键的嵌套展平"""
+    """有概率将只有一个键的嵌套展平，返回新生成的复合键名集合。"""
+    extra_keys = set()
     if not isinstance(doc, dict):
-        return doc
+        return doc, extra_keys
     for key, val in list(doc.items()):
         if isinstance(val, dict) and len(val) == 1 and random.random() < 0.3:
             inner_key, inner_val = next(iter(val.items()))
             new_key = f"{key}_{inner_key}"
             doc[new_key] = inner_val
             del doc[key]
-    return doc
+            extra_keys.add(new_key)
+    return doc, extra_keys
 
 
 # ═══════════════════════════════════════════════════
@@ -686,10 +698,11 @@ class TemplateEngine:
         doc = template(rel, km)
 
         # 后处理
+        extra_keys = set()
         if random.random() < 0.7:
             doc = _post_shuffle(doc)
         if random.random() < 0.2:
-            doc = _post_maybe_flatten_single_nested(doc)
+            doc, extra_keys = _post_maybe_flatten_single_nested(doc)
 
         # 计算安全/不安全 mask 键名集合
         roles = list(rel.variables.keys())
@@ -710,6 +723,9 @@ class TemplateEngine:
             for role in input_roles:
                 unsafe_keys.update(rel.var_synonyms[role])
                 unsafe_keys.add(km[role])
+
+        # 将后处理产生的复合键名也加入 safe_keys（它们可能包含输出变量）
+        safe_keys.update(extra_keys)
 
         return doc, safe_keys, unsafe_keys
 

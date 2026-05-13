@@ -109,7 +109,7 @@ class ValueEncoder(nn.Module):
             m_tensor, e_tensor = torch.frexp(raw)
             # m_tensor ∈ [0.5, 1.0) 或 (-1.0, -0.5]，x=0 时 m=0
             # e_tensor 为整数指数，x = m * 2^e
-            e_indices = (e_tensor + self.exponent_offset).clamp(0, self.n_exponent_bins - 1)
+            e_indices = (e_tensor + self.exponent_offset).clamp(0, self.n_exponent_bins - 1).long()
             
             m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数
             e_emb = self.exponent_embed(e_indices)     # (N_num, d_model) — 查表获取量级

@@ -69,8 +69,6 @@ class DocumentTransformer(nn.Module):
                       每个元素是一个 dict: {token_idx: (truth_val, truth_type)}
         """
         device = out.device
-        loss = torch.tensor(0.0, device=device, requires_grad=True)
-        count = 0
         
         num_preds = []
         num_targets = []
@@ -100,27 +98,26 @@ class DocumentTransformer(nn.Module):
                     str_preds.append(pred)
                     str_targets.append(truth_val)
 
+        losses = []
+
         if num_preds:
             preds_t = torch.cat(num_preds)
             targets_t = torch.tensor(num_targets, dtype=torch.float32, device=device)
             # arcsinh 压缩空间中计算 Huber Loss，消除极端值导致的梯度方差
-            loss = loss + F.huber_loss(torch.arcsinh(preds_t), torch.arcsinh(targets_t), reduction='mean')
-            count += 1
+            losses.append(F.huber_loss(torch.arcsinh(preds_t), torch.arcsinh(targets_t), reduction='mean'))
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)
             targets_t = torch.tensor(bool_targets, dtype=torch.float32, device=device)
-            loss = loss + F.binary_cross_entropy_with_logits(preds_t, targets_t, reduction='mean')
-            count += 1
+            losses.append(F.binary_cross_entropy_with_logits(preds_t, targets_t, reduction='mean'))
             
         if str_preds:
             preds_t = torch.cat(str_preds) # (N_str, lm_dim)
             with torch.no_grad():
                 targets_t = self.frozen_lm.encode(str_targets) # (N_str, lm_dim)
             y = torch.ones(len(str_preds), device=device)
-            loss = loss + F.cosine_embedding_loss(preds_t, targets_t, y, reduction='mean')
-            count += 1
+            losses.append(F.cosine_embedding_loss(preds_t, targets_t, y, reduction='mean'))
             
-        if count > 0:
-            return loss / count
-        return loss
+        if losses:
+            return sum(losses) / len(losses)
+        return torch.tensor(0.0, device=device, requires_grad=True)

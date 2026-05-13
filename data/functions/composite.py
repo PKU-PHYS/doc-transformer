@@ -9,19 +9,22 @@ from typing import List
 from .registry import FunctionRegistry, MathRelation, _safe_compute
 
 # 可安全复合的单变量函数定义（手动列出，确保 domain/range 兼容性）
+# invertible=False 的函数：mask 其 input 后无法反推
+_NON_INVERTIBLE_COMPOSABLE = {"square", "abs", "relu"}
+
 _COMPOSABLE = [
-    {"name": "sin",       "synonyms": ["sin", "sine"],           "compute": math.sin,    "domain": (-3, 3),   "range_approx": (-1, 1)},
-    {"name": "cos",       "synonyms": ["cos", "cosine"],         "compute": math.cos,    "domain": (-3, 3),   "range_approx": (-1, 1)},
-    {"name": "tanh",      "synonyms": ["tanh", "hyp_tan"],       "compute": math.tanh,   "domain": (-3, 3),   "range_approx": (-1, 1)},
-    {"name": "sigmoid",   "synonyms": ["sigmoid", "logistic"],   "compute": lambda x: 1/(1+math.exp(-x)), "domain": (-5, 5), "range_approx": (0, 1)},
-    {"name": "exp",       "synonyms": ["exp", "exponential"],    "compute": math.exp,    "domain": (-2, 2),   "range_approx": (0.14, 7.39)},
-    {"name": "square",    "synonyms": ["square", "x_squared"],   "compute": lambda x: x*x, "domain": (-3, 3), "range_approx": (0, 9)},
-    {"name": "sqrt",      "synonyms": ["sqrt", "square_root"],   "compute": math.sqrt,   "domain": (0.01, 10), "range_approx": (0.1, 3.16)},
-    {"name": "abs",       "synonyms": ["abs", "absolute"],       "compute": abs,          "domain": (-5, 5),   "range_approx": (0, 5)},
-    {"name": "log1p",     "synonyms": ["log1p", "ln_1_plus"],    "compute": math.log1p,  "domain": (0, 10),   "range_approx": (0, 2.4)},
-    {"name": "relu",      "synonyms": ["relu", "rectified"],     "compute": lambda x: max(0.0, x), "domain": (-3, 3), "range_approx": (0, 3)},
-    {"name": "erf",       "synonyms": ["erf", "error_function"], "compute": math.erf,    "domain": (-3, 3),   "range_approx": (-1, 1)},
-    {"name": "atan",      "synonyms": ["atan", "arctan"],        "compute": math.atan,   "domain": (-10, 10), "range_approx": (-1.57, 1.57)},
+    {"name": "sin",       "synonyms": ["sin", "sine"],           "compute": math.sin,    "domain": (-3, 3),   "range_approx": (-1, 1),  "invertible": True},
+    {"name": "cos",       "synonyms": ["cos", "cosine"],         "compute": math.cos,    "domain": (-3, 3),   "range_approx": (-1, 1),  "invertible": True},
+    {"name": "tanh",      "synonyms": ["tanh", "hyp_tan"],       "compute": math.tanh,   "domain": (-3, 3),   "range_approx": (-1, 1),  "invertible": True},
+    {"name": "sigmoid",   "synonyms": ["sigmoid", "logistic"],   "compute": lambda x: 1/(1+math.exp(-x)), "domain": (-5, 5), "range_approx": (0, 1), "invertible": True},
+    {"name": "exp",       "synonyms": ["exp", "exponential"],    "compute": math.exp,    "domain": (-2, 2),   "range_approx": (0.14, 7.39), "invertible": True},
+    {"name": "square",    "synonyms": ["square", "x_squared"],   "compute": lambda x: x*x, "domain": (-3, 3), "range_approx": (0, 9), "invertible": False},
+    {"name": "sqrt",      "synonyms": ["sqrt", "square_root"],   "compute": math.sqrt,   "domain": (0.01, 10), "range_approx": (0.1, 3.16), "invertible": True},
+    {"name": "abs",       "synonyms": ["abs", "absolute"],       "compute": abs,          "domain": (-5, 5),   "range_approx": (0, 5), "invertible": False},
+    {"name": "log1p",     "synonyms": ["log1p", "ln_1_plus"],    "compute": math.log1p,  "domain": (0, 10),   "range_approx": (0, 2.4), "invertible": True},
+    {"name": "relu",      "synonyms": ["relu", "rectified"],     "compute": lambda x: max(0.0, x), "domain": (-3, 3), "range_approx": (0, 3), "invertible": False},
+    {"name": "erf",       "synonyms": ["erf", "error_function"], "compute": math.erf,    "domain": (-3, 3),   "range_approx": (-1, 1), "invertible": True},
+    {"name": "atan",      "synonyms": ["atan", "arctan"],        "compute": math.atan,   "domain": (-10, 10), "range_approx": (-1.57, 1.57), "invertible": True},
 ]
 
 # 中间变量和最终输出的键名池
@@ -49,6 +52,9 @@ def _composite_generator():
         y = _safe_compute(outer["compute"], mid)
         if y is None:
             continue
+
+        # 复合函数可逆性：链中任一环节不可逆 → 整体不可逆
+        composite_invertible = inner.get("invertible", True) and outer.get("invertible", True)
 
         # 随机决定是否包含中间值
         include_mid = random.random() < 0.5
@@ -83,6 +89,7 @@ def _composite_generator():
             variables=variables,
             var_synonyms=var_syns,
             include_func_name=False,  # 复合函数名太长，不作为单独字段
+            invertible=composite_invertible,
             _generator=_composite_generator,
         )
 
@@ -99,6 +106,7 @@ def _composite_generator():
         var_synonyms={"input": _INPUT_KEYS, "mid": _MID_KEYS, "output": _FINAL_KEYS,
                       "inner_func": _INNER_FUNC_KEYS, "outer_func": _OUTER_FUNC_KEYS},
         include_func_name=False,
+        invertible=True,  # sin 和 cos 都是可逆的
         _generator=_composite_generator,
     )
 

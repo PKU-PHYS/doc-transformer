@@ -108,12 +108,12 @@ class GlobalTransformer(nn.Module):
             src_mask = src_mask + self.fork_bias_encoder(fork_bias_indices)
         
         if padding_mask is not None:
-            # padding_mask: (B, S) bool
-            # 行方向 (B, S, 1): PAD token 不应关注任何人
-            # 列方向 (B, 1, S): 任何人不应关注 PAD token
-            # 两者 OR → (B, S, S): 双向完全隔离 PAD
-            pad_mask_2d = padding_mask.unsqueeze(1) | padding_mask.unsqueeze(2)  # (B, S, S)
-            pad_bias = pad_mask_2d.unsqueeze(1).float() * (-1e9)  # (B, 1, S, S)
+            # padding_mask: (B, S) bool, True = PAD
+            # 仅做列方向遮蔽：阻止任何 token 关注 PAD 位置
+            # 不做行方向遮蔽：PAD token 可以自注意力，避免全 -inf 行导致 softmax NaN
+            # （PAD 行的输出是无意义的，但必须保持数值稳定，否则 NaN 会通过残差连接传播）
+            pad_mask_col = padding_mask.unsqueeze(1)  # (B, 1, S) — 列方向
+            pad_bias = pad_mask_col.unsqueeze(1).float() * (-1e9)  # (B, 1, 1, S)
             pad_bias = pad_bias.expand(B, H, S, S).reshape(B * H, S, S)
             src_mask = src_mask + pad_bias
         

@@ -647,7 +647,7 @@ def generate_in_context_task(target_tokens=None, max_tokens=512, distractor_leve
 ### 8.5 自动化课程学习调度与工程化加速
 为保障四阶段课程学习连续平稳进行并极大化利用硬件算力，训练入口 (`train.py`) 需要部署以下工程组件：
 1. **基于 Patience 的自动阶段流转**：摒弃单一的 `epochs` 设置。为每个阶段设置独立的目标词元长度 (`target_tokens`) 和干扰强度 (`distractor_level`)。利用 `patience` 机制监控阶段收敛，当验证 Loss 连续 `patience` 轮不再改善时，自动保存模型并无缝切换至下一阶段（例如从 Stage 1 进入 Stage 2），极大减少人工干预。
-2. **混合精度训练 (BF16 AMP)**：当模型攀升至数亿参数，应当结合 `torch.amp.autocast('cuda', dtype=torch.bfloat16)` 与 `GradScaler`。BFloat16 保留了与 FP32 相同的指数位，既有效杜绝了大规模数值计算时的下溢出，又能大幅降低显存开销并带来近 2 倍的吞吐量提升。
+2. **混合精度训练 (BF16 AMP)**：当模型攀升至数亿参数，应当使用 `torch.amp.autocast('cuda', dtype=torch.bfloat16)` 进行混合精度训练。BFloat16 保留了与 FP32 相同的指数位，既有效杜绝了大规模数值计算时的下溢出，又能大幅降低显存开销并带来近 2 倍的吞吐量提升。**注意**：由于 BF16 与 FP32 指数范围相同，不存在 FP16 的下溢问题，因此 `GradScaler` 应被禁用（`enabled=False`），不需要动态 loss scaling。
 3. **多维指标监控与诊断**：引入 TensorBoard 实时记录各阶段的训练动态（Loss, 学习率, GPU显存/峰值利用率, 梯度范数）。每 200 个 batch 调用 `_log_sample_case` 展示详细诊断输出，包括：将叶子节点按组关联分为 Useful Leaves（与 mask 同组）和 Distractor Leaves（无关干扰），自动推断函数上下文（通过 `FUNC_NAME_KEYS` 匹配函数名字段），并分类型显示预测值与真实值的对比（数值显示绝对/相对误差，布尔显示 logit，文本显示余弦相似度）。全部阶段完结后自动绘制跨阶段的 Loss 曲线图像供后续归纳总结。
 4. **完全可复现的断点续训 (Deterministic Resume)**：每个 checkpoint 除模型权重外，还完整保存 optimizer state_dict、scheduler state_dict、GradScaler state_dict、当前 epoch/global_step、best_loss 以及 Python/PyTorch/CUDA 的全部随机数生成器状态 (`get_rng_states`)。恢复时先加载模型权重，再通过 `scheduler.load_state_dict()` 精确恢复学习率调度器状态（若 checkpoint 中缺少 scheduler 状态，则 fallback 为循环快进到对应 step），最后恢复 RNG 状态，确保数据生成和 dropout 等随机行为与连续训练完全一致。训练入口支持 `--resume <checkpoint.pth>` 命令行参数，自动识别 checkpoint 所属阶段并跳过已完成的前序阶段。
 

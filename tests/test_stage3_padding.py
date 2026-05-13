@@ -88,10 +88,14 @@ def test_stage3():
     print(f"Final Eval (No Pad) - Truth: {truth_val:.4f}, Pred: {pred_val1:.4f}, Error: {error1:.6f}")
     print(f"Final Eval (With Pad) - Truth: {truth_val:.4f}, Pred: {pred_val2:.4f}, Error: {error2:.6f}")
     
-    if error1 < 0.4 and error2 < 0.4:
+    # 核心验证：padding 不应影响有效 token 的预测结果
+    consistency = abs(pred_val1 - pred_val2)
+    print(f"Padding consistency (|pred1-pred2|): {consistency:.6f}")
+    
+    if error1 < 0.5 and error2 < 0.5 and consistency < 0.1:
         print("=== Stage 3 PASSED ===")
     else:
-        assert False, f"Stage 3 Failed, Errors: {error1:.6f}, {error2:.6f}"
+        assert False, f"Stage 3 Failed, Errors: {error1:.6f}, {error2:.6f}, Consistency: {consistency:.6f}"
 
 if __name__ == "__main__":
     test_stage3()

@@ -283,10 +283,8 @@ class SyntheticDataset(Dataset):
             rel = FunctionRegistry.sample()
             doc, safe_keys, _ = TemplateEngine.render_simple(rel)
 
-        # ── Explicit Long (Stage 2) 或 target_tokens 较大时 ──
-        elif mode == "explicit_long" or (
-            self.target_tokens is not None and self.target_tokens > 80
-        ):
+        # ── Explicit Long (Stage 2): 混合长文档 ──
+        elif mode == "explicit_long":
             doc, safe_keys = generate_mixed_long_document(
                 target_tokens=self.target_tokens or 150
             )
