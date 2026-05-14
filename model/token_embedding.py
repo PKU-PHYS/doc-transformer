@@ -6,7 +6,7 @@ from typing import List
 from .json_parser import LeafNode
 from .frozen_lm import FrozenLM
 from .value_encoder import ValueEncoder
-from .path_encoder import MLPPathEncoder
+from .path_encoder import GRUPathEncoder
 from config import ModelConfig
 
 class TokenEmbedding(nn.Module):
@@ -29,7 +29,7 @@ class TokenEmbedding(nn.Module):
             exponent_offset=config.exponent_offset,
         )
         
-        self.path_encoder = MLPPathEncoder(
+        self.path_encoder = GRUPathEncoder(
             frozen_lm_dim=config.frozen_lm_dim,
             d_model=config.d_model,
         )
