@@ -97,22 +97,20 @@ class GlobalTransformer(nn.Module):
         """
         x = self.emb_norm(x)
         
+        # 检查是否有实际的 fork bias（非全零）
+        has_fork_bias = (fork_bias_indices is not None and fork_bias_indices.any())
+        
         B, S, _ = x.shape
         H = self.fork_bias_encoder.num_heads
         
         # 构建统一的 float additive mask (B*H, S, S)
-        # fork bias + padding 都以 float 形式合并，避免类型不匹配 warning
         src_mask = torch.zeros(B * H, S, S, device=x.device, dtype=x.dtype)
         
-        if fork_bias_indices is not None:
+        if has_fork_bias:
             src_mask = src_mask + self.fork_bias_encoder(fork_bias_indices)
         
         if padding_mask is not None:
-            # padding_mask: (B, S) bool, True = PAD
-            # 仅做列方向遮蔽：阻止任何 token 关注 PAD 位置
-            # 不做行方向遮蔽：PAD token 可以自注意力，避免全 -inf 行导致 softmax NaN
-            # （PAD 行的输出是无意义的，但必须保持数值稳定，否则 NaN 会通过残差连接传播）
-            pad_mask_col = padding_mask.unsqueeze(1)  # (B, 1, S) — 列方向
+            pad_mask_col = padding_mask.unsqueeze(1)          # (B, 1, S)
             pad_bias = pad_mask_col.unsqueeze(1).float() * (-1e9)  # (B, 1, 1, S)
             pad_bias = pad_bias.expand(B, H, S, S).reshape(B * H, S, S)
             src_mask = src_mask + pad_bias
