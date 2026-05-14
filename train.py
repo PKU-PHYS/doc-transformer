@@ -63,9 +63,10 @@ def set_rng_states(states: dict):
     if "python_rng" in states:
         random.setstate(states["python_rng"])
     if "torch_rng" in states:
-        torch.random.set_rng_state(states["torch_rng"])
+        # set_rng_state 要求 CPU ByteTensor；checkpoint 可能被 map_location 移到了 GPU
+        torch.random.set_rng_state(states["torch_rng"].cpu().byte())
     if "cuda_rng" in states and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(states["cuda_rng"])
+        torch.cuda.set_rng_state_all([s.cpu().byte() for s in states["cuda_rng"]])
 
 
 def plot_loss_curves(all_logs: dict, save_dir: str):

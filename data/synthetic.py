@@ -331,31 +331,32 @@ class SyntheticDataset(Dataset):
         """
         对叶子列表应用掩码，返回 (masked_leaves, target_masks)。
 
-        Mask 选择优先级：
-          1. safe_keys (TemplateEngine 返回的当前关系精确安全键名集合)
-          2. _FALLBACK_OUTPUT_KEYS (全局输出键名)
-          3. 非装饰性数值节点
-          4. 最后一个数值节点
+        优先 mask 输出变量（最后一个数值节点），保证被 mask 的值总是可从其余变量唯一确定。
+        在所有生成器中，输出变量总是 variables dict 的最后一个 key，
+        flat_basic 模板保持此顺序，因此 parse 后最后一个数值叶子 = 输出变量。
         """
         num_masks = max(1, int(len(leaves) * self.mask_ratio))
         num_indices = [i for i, l in enumerate(leaves) if l.value_type == "number"]
         other_indices = [i for i, l in enumerate(leaves) if l.value_type != "number"]
 
         if num_indices:
-            mask_indices = self._select_num_targets(
-                leaves, num_indices, num_masks, safe_keys
-            )
-            # 仍需更多 mask 时，从非数值节点补充
-            extra = num_masks - len(mask_indices)
-            if extra > 0 and other_indices:
-                mask_indices += random.sample(
-                    other_indices, min(extra, len(other_indices))
-                )
+            # 输出变量 = 最后一个数值叶子，优先 mask
+            output_idx = num_indices[-1]
+            mask_indices = [output_idx]
+
+            # 如果还需要更多 mask，从其余数值节点中选
+            if num_masks > 1:
+                remaining_num = [i for i in num_indices if i != output_idx]
+                extra_needed = num_masks - 1
+                if remaining_num and extra_needed > 0:
+                    mask_indices += random.sample(remaining_num, min(extra_needed, len(remaining_num)))
+                    extra_needed = num_masks - len(mask_indices)
+                # 仍不够，从非数值节点补
+                if other_indices and extra_needed > 0:
+                    mask_indices += random.sample(other_indices, min(extra_needed, len(other_indices)))
         else:
-            mask_indices = (
-                random.sample(other_indices, min(num_masks, len(other_indices)))
-                if other_indices else []
-            )
+            # 没有数值节点，从其他类型选
+            mask_indices = random.sample(other_indices, min(num_masks, len(other_indices))) if other_indices else []
 
         # 执行 mask 替换
         target_masks = {}
@@ -368,44 +369,6 @@ class SyntheticDataset(Dataset):
                 path_ids=orig.path_ids, group_ids=orig.group_ids,
             )
         return leaves, target_masks
-
-    @staticmethod
-    def _select_num_targets(leaves: List[LeafNode], num_indices: List[int],
-                            num_masks: int, safe_keys: Optional[set]) -> List[int]:
-        """
-        从数值节点中选出最安全的 mask 目标。
-
-        逻辑：
-          1. 若 safe_keys 可用，优先 mask path[-1] ∈ safe_keys 的节点
-          2. Fallback 到全局 _FALLBACK_OUTPUT_KEYS
-          3. 再 fallback 到非装饰性数值节点
-          4. 最后兜底取最后一个数值节点
-        """
-        def _match(key_set):
-            return [
-                i for i in num_indices
-                if leaves[i].path and leaves[i].path[-1] in key_set
-            ]
-
-        # 优先使用 TemplateEngine 返回的精确安全键名
-        candidates = _match(safe_keys) if safe_keys else []
-
-        # Fallback: 全局输出键名
-        if not candidates:
-            candidates = _match(_FALLBACK_OUTPUT_KEYS)
-
-        # Fallback: 排除装饰性字段后的所有数值节点
-        if not candidates:
-            candidates = [
-                i for i in num_indices
-                if not leaves[i].path or leaves[i].path[-1] not in _DECORATION_KEYS
-            ]
-
-        # 兜底: 至少 mask 最后一个数值节点
-        if not candidates:
-            candidates = [num_indices[-1]]
-
-        return random.sample(candidates, min(num_masks, len(candidates)))
 
 
 # ═══════════════════════════════════════════════════════════════

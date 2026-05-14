@@ -156,7 +156,7 @@ def _sample_domain(lo: float, hi: float, log_uniform: bool = False) -> float:
         return sign * _sample_log_uniform(min(abs_lo, abs_hi), max(abs_lo, abs_hi))
 
 
-def _safe_compute(compute_fn, x, max_abs=2**32):
+def _safe_compute(compute_fn, x, max_abs=10000.0):
     """安全计算，捕获 domain error 并拒绝过大的值。"""
     try:
         y = compute_fn(x)
