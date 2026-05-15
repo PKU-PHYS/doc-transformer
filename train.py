@@ -1,14 +1,11 @@
-"""
-课程学习训练入口 — 按 plan.md 第八章执行四阶段课程学习训练。
+"""训练入口 — 支持表格数据的课程学习训练。
 
-  Stage 0: 极简预热训练 (simple) — Tier 0 扁平 KV
-  Stage 1: 复合与树状结构基础训练 (explicit) — 嵌套/复合/数组/文本任务
-  Stage 2: 抗噪训练 (explicit_long) — 长文档 + 重度干扰
-  Stage 3: 上下文规则归纳 (in_context) — 隐式函数推断
+  Stage 0: 少行预热 (n_rows=2-3)
+  Stage 1: 中等行数 (n_rows=5-8)
+  Stage 2: 多行复杂推断 (n_rows=15-30)
 
 特性：
   - 基于 loss 收敛自动切换阶段 (patience-based)
-  - 每个 Stage 在 loss 不再下降时自动结束
   - Loss 曲线自动保存为 PNG 图片
   - 定期保存 checkpoint (每 N epochs)
   - 支持 --resume 断点续训，含完整 RNG 状态恢复
@@ -19,6 +16,7 @@ import time
 import json
 import random
 import argparse
+import functools
 import torch
 import matplotlib
 matplotlib.use("Agg")  # 无头模式
@@ -31,7 +29,8 @@ from torch.utils.tensorboard import SummaryWriter
 from config import ModelConfig, TrainConfig
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
-from data.synthetic import SyntheticDataset, collate_fn
+from data.base import collate_fn
+from data.tabular import TabularDataset, TableLoader
 
 
 SEED = 42
@@ -140,35 +139,19 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
     """诊断输出：展示一个样本的输入、mask、预测值和真实值。"""
     if sample_idx >= len(batched_leaves):
         return
-    
+
     leaves = batched_leaves[sample_idx]
     masks = batched_masks[sample_idx]
-    
+
     if not leaves or not masks:
         return
-    
+
     print(f"\n  {'─'*60}")
     print(f"  🔍 Sample Case [{stage_name}] E{epoch:03d} B{batch_idx:04d}")
     print(f"  {'─'*60}")
-    
-    from data.functions.registry import FUNC_NAME_KEYS
-    
-    # 将 leaves 分为 useful (与 mask 属于同一 group) 和 useless (distractors)
-    masked_group_ids = set()
-    for idx in masks.keys():
-        masked_group_ids.update(leaves[idx].group_ids)
-        
-    useful_indices = []
-    useless_indices = []
-    for i, l in enumerate(leaves):
-        if set(l.group_ids) & masked_group_ids or not masked_group_ids:
-            # 如果没有 group (极简情况) 或者匹配到了 group
-            useful_indices.append(i)
-        else:
-            useless_indices.append(i)
 
     def _format_leaf(i, leaf, is_masked):
-        path_str = ".".join(leaf.path[-2:]) if len(leaf.path) > 2 else ".".join(leaf.path)
+        path_str = ".".join(leaf.path)
         marker = "  🎯" if is_masked else ""
         if leaf.value_type == "number":
             val_str = f"{leaf.value:.4g}"
@@ -176,56 +159,45 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
             val_str = f'"{leaf.value[:20]}"' if len(str(leaf.value)) > 20 else f'"{leaf.value}"'
         else:
             val_str = str(leaf.value)
-        return f"    [{i:3d}] {path_str:30s} = {val_str:15s} ({leaf.value_type}){marker}"
+        return f"    [{i:3d}] {path_str:40s} = {val_str:15s} ({leaf.value_type}){marker}"
 
-    print(f"  🟢 Useful Leaves (associated with masks) ({len(useful_indices)} tokens):")
-    for i in useful_indices:
-        print(_format_leaf(i, leaves[i], i in masks))
-        
-    if useless_indices:
-        print(f"  🔴 Distractor Leaves ({len(useless_indices)} tokens):")
-        for i in useless_indices[:5]:
-            print(_format_leaf(i, leaves[i], False))
-        if len(useless_indices) > 5:
-            print(f"    ... ({len(useless_indices) - 5} more distractor tokens)")
-            
-    # 智能推断函数上下文的辅助函数
-    def _find_func_context_and_args(target_leaf, target_idx):
+    # 按 group_ids 分行显示
+    print(f"  Leaves ({len(leaves)} tokens):")
+    current_group = None
+    row_num = -1
+    display_limit = min(len(leaves), 30)
+    for i in range(display_limit):
+        leaf = leaves[i]
+        leaf_group = tuple(leaf.group_ids) if leaf.group_ids else ()
+        if leaf_group != current_group:
+            current_group = leaf_group
+            row_num += 1
+            print(f"    ── Row {row_num} ──")
+        print(_format_leaf(i, leaf, i in masks))
+    if len(leaves) > display_limit:
+        print(f"    ... ({len(leaves) - display_limit} more tokens)")
+
+    # 推断上下文
+    def _find_context(target_leaf, target_idx):
         target_group = set(target_leaf.group_ids)
-        
-        # 预构建 leaf → index 映射（O(N) 替代 O(N²) 的 list.index()）
-        leaf_to_idx = {id(l): i for i, l in enumerate(leaves)}
-        
-        # 收集在同一个大 group 里的所有节点（同组依赖）
-        siblings = [l for l in leaves if set(l.group_ids) & target_group]
-        # 如果是 Stage 0，没生成有效 group，或者没找到
-        if not siblings:
-            siblings = leaves
-            
-        func_name = "implicit_function"
         args = []
-        
-        for l in siblings:
-            idx = leaf_to_idx[id(l)]
-            path_key = l.path[-1].lower()
-            if l.value_type == "string" and path_key in FUNC_NAME_KEYS:
-                func_name = str(l.value)
-            elif idx != target_idx and path_key not in ["category", "id", "timestamp", "author", "confidence", "tags", "label", "family", "group"]:
-                args.append(f"[{idx}]")
-                
-        return func_name, args
+        for i, l in enumerate(leaves):
+            if i != target_idx and set(l.group_ids) & target_group:
+                args.append(f"[{i}]")
+        col_name = target_leaf.path[-1] if target_leaf.path else "?"
+        return col_name, args
 
     # 显示 mask 预测 vs 真实值
     print(f"\n  🎯 Masked predictions ({len(masks)} masks):")
-    sample_out = out[sample_idx]  # (max_len, d_model)
-    
+    sample_out = out[sample_idx]
+
     for idx, (truth_val, truth_type) in masks.items():
         mask_repr = sample_out[idx].unsqueeze(0)
         orig_leaf = leaves[idx]
-        func_name, args = _find_func_context_and_args(orig_leaf, idx)
-        
-        prefix = f"{func_name}({','.join(args)})=[{idx}]"
-        
+        col_name, args = _find_context(orig_leaf, idx)
+
+        prefix = f"{col_name}({','.join(args[:5])})=[{idx}]"
+
         if truth_type == "number":
             pred_raw = model.decode_head.predict_number(mask_repr).item()
             truth_f = float(truth_val)
@@ -243,45 +215,86 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
             target_emb = model.frozen_lm.encode([truth_val])
             cos_sim = torch.nn.functional.cosine_similarity(pred_emb, target_emb).item()
             print(f"    {prefix} string: cos_sim={cos_sim:.4f}  true=\"{truth_val}\"")
-    
+
     print(f"  {'─'*60}\n")
+
+
+def _evaluate_rmse(model, test_dataset, model_config, train_config):
+    """在 test set 上计算 RMSE。"""
+    import math
+    device = train_config.device
+    model.eval()
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=train_config.batch_size,
+        shuffle=False,
+        collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
+        num_workers=0,
+    )
+
+    squared_errors = []
+    with torch.no_grad():
+        for batched_leaves, batched_masks, padding_mask, fork_bias_indices in test_loader:
+            padding_mask = padding_mask.to(device)
+            fork_bias_indices = fork_bias_indices.to(device)
+
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16,
+                                    enabled=(device == "cuda" and torch.cuda.is_bf16_supported())):
+                out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
+
+            # 提取每个样本的 mask 预测
+            for sample_idx in range(len(batched_leaves)):
+                masks = batched_masks[sample_idx]
+                for mask_pos, (true_val, val_type) in masks.items():
+                    if val_type == "number":
+                        mask_repr = out[sample_idx, mask_pos].unsqueeze(0)
+                        pred_val = model.decode_head.predict_number(mask_repr).item()
+                        err = (pred_val - float(true_val)) ** 2
+                        squared_errors.append(err)
+
+    model.train()
+
+    if squared_errors:
+        rmse = math.sqrt(sum(squared_errors) / len(squared_errors))
+    else:
+        rmse = float("inf")
+    return rmse
 
 
 def train_stage(
     model: DocumentTransformer,
     frozen_lm: FrozenLM,
     stage_name: str,
-    train_mode: str,
+    dataset: TabularDataset,
     max_epochs: int,
     patience: int,
-    dataset_size: int,
-    target_tokens: int,
-    distractor_level: int,
     train_config: TrainConfig,
     model_config: ModelConfig,
     writer: SummaryWriter = None,
     global_step: int = 0,
     checkpoint_interval: int = 5,
     resume_ckpt: dict = None,
+    test_dataset: TabularDataset = None,
 ) -> dict:
     """
     训练单个 Stage，基于 loss plateau 自动结束。
 
     Args:
-        max_epochs: 该 Stage 最大 epoch 数上限（保底退出）
+        dataset: 数据集实例 (TabularDataset)
+        max_epochs: 该 Stage 最大 epoch 数上限
         patience: 连续 N 个 epoch loss 不下降则视为收敛
-        checkpoint_interval: 每 N 个 epoch 保存一次 checkpoint
-        resume_ckpt: 恢复用的 checkpoint dict，含 optimizer/scheduler/scaler/epoch/best_loss
+        resume_ckpt: 恢复用的 checkpoint dict
 
     Returns:
         stage_log: 包含 loss 历史的 dict
     """
     device = train_config.device
+    dataset_size = len(dataset)
     print(f"\n{'='*70}")
     print(f"  {stage_name}")
-    print(f"  mode={train_mode}, max_epochs={max_epochs}, patience={patience}")
-    print(f"  dataset_size={dataset_size}, target_tokens={target_tokens}")
-    print(f"  distractor_level={distractor_level}")
+    print(f"  n_rows={dataset.n_rows}, dataset_size={dataset_size}")
+    print(f"  max_epochs={max_epochs}, patience={patience}")
     print(f"{'='*70}\n")
 
     optimizer = AdamW(model.parameters(), lr=train_config.lr, 
@@ -348,21 +361,13 @@ def train_stage(
     for epoch in range(start_epoch, max_epochs):
         epoch_start = time.time()
 
-        # 每个 epoch 生成新数据
-        dataset = SyntheticDataset(
-            size=dataset_size,
-            mask_ratio=train_config.mask_ratio,
-            max_tokens=model_config.max_tokens,
-            train_mode=train_mode,
-            target_tokens=target_tokens,
-            distractor_level=distractor_level,
-        )
         loader = DataLoader(
             dataset,
             batch_size=train_config.batch_size,
             shuffle=True,
-            collate_fn=lambda batch: collate_fn(batch, model_config.max_tokens),
-            num_workers=0,
+            collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
+            num_workers=4,
+            persistent_workers=True,
         )
 
         model.train()
@@ -396,20 +401,14 @@ def train_stage(
                 writer.add_scalar(f"{stage_name}/lr", optimizer.param_groups[0]["lr"], global_step)
                 writer.add_scalar(f"{stage_name}/grad_norm", grad_norm.item(), global_step)
 
-            # ── 诊断输出：每 200 batch 展示一个案例 ──
-            if batch_idx % 200 == 0 and batch_idx > 0:
-                _log_sample_case(model, out, batched_leaves, batched_masks, 
-                                 sample_idx=0, stage_name=stage_name, 
-                                 epoch=epoch+1, batch_idx=batch_idx)
-
-            if batch_idx % 50 == 0:
-                avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
-                lr_now = optimizer.param_groups[0]["lr"]
-                print(f"  [{stage_name}] E{epoch+1:03d} "
-                      f"B{batch_idx:04d}/{len(loader)} "
-                      f"Loss={batch_loss:.6f} "
-                      f"tokens={avg_tokens:.0f} "
-                      f"lr={lr_now:.2e}")
+            # ── 每 batch 输出 loss ──
+            avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
+            lr_now = optimizer.param_groups[0]["lr"]
+            print(f"  [{stage_name}] E{epoch+1:03d} "
+                  f"B{batch_idx:04d}/{len(loader)} "
+                  f"Loss={batch_loss:.6f} "
+                  f"tokens={avg_tokens:.0f} "
+                  f"lr={lr_now:.2e}")
                       
             scheduler.step()
 
@@ -439,6 +438,19 @@ def train_stage(
               f"AvgLoss={avg_loss:.6f} ({improvement}) "
               f"Time={epoch_time:.1f}s"
               f"{mem_info}")
+
+        # ── 每 epoch 结束展示一个诊断案例 ──
+        _log_sample_case(model, out, batched_leaves, batched_masks,
+                         sample_idx=0, stage_name=stage_name,
+                         epoch=epoch+1, batch_idx=batch_idx)
+
+        # ── Test RMSE 评估 ──
+        if test_dataset is not None:
+            test_rmse = _evaluate_rmse(model, test_dataset, model_config, train_config)
+            stage_log.setdefault("test_rmse", []).append(test_rmse)
+            print(f"  🎯 Test RMSE: {test_rmse:.4f}")
+            if writer is not None:
+                writer.add_scalar(f"{stage_name}/test_rmse", test_rmse, epoch + 1)
 
         # ── TensorBoard: per-epoch metrics ──
         if writer is not None:
@@ -508,47 +520,65 @@ def save_checkpoint(model, name, checkpoint_dir, log=None,
             json.dump(log, f, indent=2)
         print(f"  📄 Log: {log_path}")
 
-
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Train Document Transformer on tabular data")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint .pth to resume from")
+    parser.add_argument("--dataset", type=str, default="california_housing",
+                        help="Dataset name (california_housing, diabetes, wine_quality, covertype)")
+    parser.add_argument("--csv", type=str, default=None,
+                        help="Path to custom CSV file (overrides --dataset)")
     args = parser.parse_args()
 
-    # 全局 seed — 保证每次从头跑都完全一致
     set_seed(SEED)
 
     model_config = ModelConfig()
     train_config = TrainConfig()
 
+    # ── 加载数据集配方 ──
+    from data.tabular.configs import get_dataset_config
+    ds_config = get_dataset_config(args.dataset)
+
     print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
           f"H={model_config.n_heads}, ff={model_config.d_ff}")
     print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
+    print(f"Dataset config: n_rows={ds_config.n_rows}, "
+          f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
+
+    # ── 加载表格数据 ──
+    if args.csv:
+        print(f"\n  📂 Loading CSV: {args.csv}")
+        full_loader = TableLoader.from_csv(args.csv)
+    else:
+        print(f"\n  📂 Loading dataset: {args.dataset}")
+        full_loader = TableLoader.from_builtin(
+            args.dataset, max_rows=ds_config.max_rows,
+            target_col=ds_config.target_col,
+        )
+
+    print(f"  ✅ {full_loader.n_rows} rows × {full_loader.n_cols} cols")
+
+    # ── 标准 train/test split ──
+    train_loader, test_loader = full_loader.split(test_ratio=0.2, seed=42)
+    table_loader = train_loader  # 训练只用 train split
+
+    print(f"  Numeric: {table_loader.numeric_cols}")
+    print(f"  Target: {table_loader.target_col}")
 
     device = train_config.device
     frozen_lm = FrozenLM(model_config.frozen_lm_name, device=device)
     model = DocumentTransformer(model_config, frozen_lm).to(device)
 
-    # Resume: 加载 checkpoint
-    resume_stage = None
+    # Resume
     resume_ckpt = None
     if args.resume:
         print(f"\n  \U0001f504 Resuming from: {args.resume}")
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
-        resume_stage = ckpt.get("stage", None)
-        # 统一为短名: "stage0_simple" → "stage0"
-        if resume_stage and "stage0" in resume_stage:
-            resume_stage = "stage0"
-        elif resume_stage and "stage1" in resume_stage:
-            resume_stage = "stage1"
-        elif resume_stage and "stage2" in resume_stage:
-            resume_stage = "stage2"
-        elif resume_stage and "stage3" in resume_stage:
-            resume_stage = "stage3"
         resume_ckpt = ckpt
-        print(f"  \u2705 Loaded. Stage={resume_stage}, epoch={ckpt.get('epoch', '?')}, "
+        print(f"  \u2705 Loaded. epoch={ckpt.get('epoch', '?')}, "
               f"best_loss={ckpt.get('best_loss', '?')}")
+
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
     print(f"Checkpoint dir: {train_config.checkpoint_dir}")
@@ -561,143 +591,62 @@ def main():
     print(f"  📊 TensorBoard: runs/{run_name}")
     print(f"     Launch: tensorboard --logdir runs/")
 
-    # 记录超参数
     writer.add_text("config/model", f"d={model_config.d_model}, L={model_config.n_layers}, "
                      f"H={model_config.n_heads}, ff={model_config.d_ff}")
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
-                     f"beta2=0.95, bf16=True")
+                     f"dataset={args.dataset}, n_rows={ds_config.n_rows}")
 
     all_logs = {}
+
+    # ── 按配方中的 stages 逐阶段训练 ──
     global_step = 0
+    for stage_idx, stage_cfg in enumerate(ds_config.stages):
+        dataset = TabularDataset(
+            loader=table_loader,
+            n_rows=ds_config.n_rows,
+            mask_ratio=train_config.mask_ratio,
+            max_tokens=model_config.max_tokens,
+        )
+        test_ds = TabularDataset(
+            loader=test_loader,
+            n_rows=ds_config.n_rows,
+            mask_ratio=train_config.mask_ratio,
+            max_tokens=model_config.max_tokens,
+        )
 
-    # 确定要跳过的 stages（resume 时从下一个 stage 开始）
-    skip_stages = set()
-    if resume_stage == "stage0":
-        pass
-    elif resume_stage == "stage1":
-        skip_stages.add("stage0")
-    elif resume_stage == "stage2":
-        skip_stages.update(["stage0", "stage1"])
-    elif resume_stage == "stage3":
-        skip_stages.update(["stage0", "stage1", "stage2"])
-
-    # ════════════════════════════════════════
-    # Stage 0: 极简预热训练
-    # ════════════════════════════════════════
-    if "stage0" not in skip_stages:
-        log0, global_step = train_stage(
+        stage_name = f"{args.dataset}_{stage_cfg.name}"
+        log, global_step = train_stage(
             model=model,
             frozen_lm=frozen_lm,
-            stage_name="stage0_simple",
-            train_mode="simple",
-            max_epochs=train_config.stage0_max_epochs,
-            patience=train_config.stage0_patience,
-            dataset_size=train_config.dataset_size,
-            target_tokens=train_config.stage0_target_tokens,
-            distractor_level=train_config.stage0_distractor_level,
+            stage_name=stage_name,
+            dataset=dataset,
+            max_epochs=stage_cfg.max_epochs,
+            patience=stage_cfg.patience,
             train_config=train_config,
             model_config=model_config,
             writer=writer,
             global_step=global_step,
-            resume_ckpt=resume_ckpt if resume_stage == "stage0" else None,
+            resume_ckpt=resume_ckpt if stage_idx == 0 else None,
+            test_dataset=test_ds,
         )
-        save_checkpoint(model, "stage0_final", train_config.checkpoint_dir, log0)
-        all_logs["stage0"] = log0
-    else:
-        print(f"\n  ⏭️  Skipping stage0 (resumed from {resume_stage})")
+        save_checkpoint(model, f"{stage_cfg.name}_final", train_config.checkpoint_dir, log)
+        all_logs[stage_cfg.name] = log
 
-    # ════════════════════════════════════════
-    # Stage 1: 复合与树状结构基础训练
-    # ════════════════════════════════════════
-    if "stage1" not in skip_stages:
-        log1, global_step = train_stage(
-            model=model,
-            frozen_lm=frozen_lm,
-            stage_name="stage1_composite",
-            train_mode="explicit",
-            max_epochs=train_config.stage1_max_epochs,
-            patience=train_config.stage1_patience,
-            dataset_size=train_config.dataset_size,
-            target_tokens=train_config.stage1_target_tokens,
-            distractor_level=train_config.stage1_distractor_level,
-            train_config=train_config,
-            model_config=model_config,
-            writer=writer,
-            global_step=global_step,
-            resume_ckpt=resume_ckpt if resume_stage == "stage1" else None,
-        )
-        save_checkpoint(model, "stage1_final", train_config.checkpoint_dir, log1)
-        all_logs["stage1"] = log1
-    else:
-        print(f"\n  ⏭️  Skipping stage1 (resumed from {resume_stage})")
-
-    # ════════════════════════════════════════
-    # Stage 2: 抗噪训练 (长文档与干扰字段)
-    # ════════════════════════════════════════
-    if "stage2" not in skip_stages:
-        log2, global_step = train_stage(
-            model=model,
-            frozen_lm=frozen_lm,
-            stage_name="stage2_antinoise",
-            train_mode="explicit_long",
-            max_epochs=train_config.stage2_max_epochs,
-            patience=train_config.stage2_patience,
-            dataset_size=train_config.dataset_size,
-            target_tokens=train_config.stage2_target_tokens,
-            distractor_level=train_config.stage2_distractor_level,
-            train_config=train_config,
-            model_config=model_config,
-            writer=writer,
-            global_step=global_step,
-            resume_ckpt=resume_ckpt if resume_stage == "stage2" else None,
-        )
-        save_checkpoint(model, "stage2_final", train_config.checkpoint_dir, log2)
-        all_logs["stage2"] = log2
-    else:
-        print(f"\n  ⏭️  Skipping stage2 (resumed from {resume_stage})")
-
-    # ════════════════════════════════════════
-    # Stage 3: 上下文规则归纳 (In-Context Learning)
-    # ════════════════════════════════════════
-    if "stage3" not in skip_stages:
-        log3, global_step = train_stage(
-            model=model,
-            frozen_lm=frozen_lm,
-            stage_name="stage3_incontext",
-            train_mode="in_context",
-            max_epochs=train_config.stage3_max_epochs,
-            patience=train_config.stage3_patience,
-            dataset_size=train_config.dataset_size,
-            target_tokens=train_config.stage3_target_tokens,
-            distractor_level=train_config.stage3_distractor_level,
-            train_config=train_config,
-            model_config=model_config,
-            writer=writer,
-            global_step=global_step,
-            resume_ckpt=resume_ckpt if resume_stage == "stage3" else None,
-        )
-        save_checkpoint(model, "stage3_final", train_config.checkpoint_dir, log3)
-        all_logs["stage3"] = log3
-
-    # ════════════════════════════════════════
-    # 保存完整日志 + 绘制 Loss 曲线
-    # ════════════════════════════════════════
-    log_path = os.path.join(train_config.checkpoint_dir, "full_training_log.json")
+    # ── 保存日志 ──
+    log_path = os.path.join(train_config.checkpoint_dir, "training_log.json")
     with open(log_path, "w") as f:
         json.dump(all_logs, f, indent=2)
-    print(f"\n  📁 Full log: {log_path}")
+    print(f"\n  📁 Log: {log_path}")
 
     plot_loss_curves(all_logs, train_config.checkpoint_dir)
 
-    # 训练摘要
     print(f"\n{'='*70}")
     print(f"  Training Complete!")
     print(f"{'='*70}")
-    for stage_key, log in all_logs.items():
+    for name, log in all_logs.items():
         print(f"  {log['stage']:25s} | "
               f"epochs={log['stopped_at_epoch']:3d} | "
-              f"best_loss={log['best_loss']:.6f} | "
-              f"{log['reason']}")
+              f"best_loss={log['best_loss']:.6f} | {log['reason']}")
     print(f"{'='*70}\n")
 
     writer.close()
@@ -705,3 +654,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

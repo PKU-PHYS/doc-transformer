@@ -8,3 +8,5 @@ checkpoints/
 *.pth
 .pytest_cache/runs/
 runs/
+*.pkl
+data/tabular/cache/

@@ -27,7 +27,7 @@ class FrozenLM:
         如果全在缓存里，直接拼接返回；否则将没见过的文本送入模型。
         """
         if not texts:
-            return torch.empty((0, self.model.get_sentence_embedding_dimension()), device=self.device)
+            return torch.empty((0, self.model.get_embedding_dimension()), device=self.device)
 
         # 区分命中与未命中的
         miss_indices = []
@@ -58,4 +58,4 @@ class FrozenLM:
         return torch.stack(out_list)
         
     def dim(self) -> int:
-        return self.model.get_sentence_embedding_dimension()
+        return self.model.get_embedding_dimension()

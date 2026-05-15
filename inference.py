@@ -17,7 +17,7 @@ from config import ModelConfig
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from model.json_parser import LeafNode, JSONParser
-from data.synthetic import compute_fork_bias_indices
+from data.base import compute_fork_bias_indices
 
 
 def _find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]:
