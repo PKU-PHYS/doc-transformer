@@ -167,20 +167,20 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
 这一设计使模型对数值的"精度"（0.50 vs 0.51）和"量级"（$10^3$ vs $10^{-3}$）获得了**完全解耦**的感知能力。
 
 
-### 3.2 路径编码 $\mathbf{p}_i$：MLP Fusion
+### 3.2 路径编码 $\mathbf{p}_i$：GRU 递归编码
 
 路径现在包含字段名节点（type=0）和数组实例节点（type=1）。例如 `["doc"(0), "sites"(0), "sites"(1), "element"(0)]`。
 
-采用 **MLP Fusion** 方案——对每个路径节点，将文本特征、类型嵌入和正弦深度编码三路相加，经 MLP 非线性投影后求和：
+采用 **GRU 递归编码** 方案——对每个路径节点，将 FrozenLM 文本特征与节点类型嵌入相加后，按路径顺序送入 GRU，取最终隐藏状态作为路径表示：
 
 ```
-  对路径中每个节点 l (depth=0,1,2,...):
-    fused_l = LayerNorm(FrozenLM(text_l) + TypeEmb(type_l) + SinPE(depth_l))
-    projected_l = MLP(fused_l)     # Linear(frozen_dim, d*2) -> GELU -> Linear(d*2, d)
-  路径编码 p = Σ projected_l       # Masked Sum Pooling（忽略 padding 位置）
+  GRU 初始隐藏状态 h0: 可学习零向量 (d_model)
+  对路径中每个节点 l (按顺序):
+    input_l = FrozenLM(text_l) + TypeEmb(type_l)   # (frozen_lm_dim,)
+  路径编码 p = GRU([input_0, input_1, ...], h0)[-1]  # 取最终隐藏状态
 ```
 
-**核心优势**：MLP 的非线性在 sum 前打破了加法交换律——不同深度的同一字段名产生不同的 MLP 输出，因此路径顺序敏感（`[a,b]` ≠ `[b,a]`）。正弦 PE 是公式计算，无深度上限。
+**核心优势**：GRU 天然序列敏感，精确编码路径节点的顺序和依赖关系。对短路径（如 Stage 0 的深度 2 路径 `["doc", "value"]`）信号传播效率极高。`node_type_emb` 显式区分 Dict Key（type=0）与 Array Instance（type=1）。
 
 ### 3.3 Group-Fork Relative Attention Bias
 
@@ -230,7 +230,7 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
 │   ├── json_parser.py             # JSON 递归解析算法 -> List[LeafNode]
 │   ├── frozen_lm.py               # 冻结句子模型包装与缓存机制
 │   ├── value_encoder.py           # 值编码器（Base-2 frexp 尾数傅里叶 + 指数嵌入/文本/布尔/MASK）
-│   ├── path_encoder.py            # MLP Fusion 路径编码器（text + type_emb + sinusoidal_depth -> MLP -> sum）
+│   ├── path_encoder.py            # GRU 路径编码器（text + type_emb -> GRU -> 最终隐藏状态）
 │   ├── token_embedding.py         # 最终 token 嵌入组装 (Value + Path) + Batch 级去重
 │   ├── transformer.py             # ForkBiasEncoder + 标准双向 Transformer (fork bias 通过 src_mask 注入)
 │   ├── decode_head.py             # 类型特定解码头 (数值/布尔/文本，极小方差初始化)
@@ -562,7 +562,7 @@ def compute_fork_bias_indices(path_ids, is_group, valid_path_lens):
 ### 阶段 1：复合与树状结构基础训练 (Stage 1 - Composite)
 - **切换时机**：Stage 0 的 Loss 趋于收敛（patience 触发）。
 - **数据形态**：单条或多条数学关系打包的 JSON 文档，包含嵌套结构（如 `{params: {...}, result: val}`）、复合文档（多条关系打包为子对象）、数组文档（多个同结构对象组成的 JSON 数组）和文本推理任务，内部包含显式的函数名称字段（如 `function: "sin"`）。
-- **训练目的**：让模型在 Stage 0 的数值基础上，进一步学会理解树状结构、MLP 路径编码和 Fork Bias 引导的跨组注意力。
+- **训练目的**：让模型在 Stage 0 的数值基础上，进一步学会理解树状结构、GRU 路径编码和 Fork Bias 引导的跨组注意力。
 - **配置**：`train_mode="explicit"`, `target_tokens=60`, `distractor_level=0`。
 - **函数过滤**：`FunctionRegistry.set_filter(max_tier=1)`，允许 Tier 0 和 Tier 1 函数。
 
