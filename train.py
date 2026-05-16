@@ -575,6 +575,8 @@ def main():
                         help="Dataset name (california_housing, matbench_dielectric, etc.)")
     parser.add_argument("--csv", type=str, default=None,
                         help="Path to custom CSV file (overrides --dataset)")
+    parser.add_argument("--add-nn", action="store_true", default=False,
+                        help="[Matbench] Add nearest-neighbor distances to crystal JSON")
     args = parser.parse_args()
 
     set_seed(SEED)
@@ -594,13 +596,21 @@ def main():
         mb_config = get_matbench_config(args.dataset)
         eval_metric = mb_config.metric  # "mae"
 
+        # 合并 CLI 选项到 dataset_options
+        dataset_options = dict(mb_config.dataset_options)  # 复制配方默认值
+        if args.add_nn:
+            dataset_options["add_nn_distances"] = True
+
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
         print(f"Matbench task: {args.dataset} — {mb_config.description}")
         print(f"Eval metric: {eval_metric.upper()}")
+        if dataset_options:
+            print(f"Dataset options: {dataset_options}")
 
-        mb_loader = MatbenchLoader(args.dataset)
+        mb_loader = MatbenchLoader(args.dataset,
+                                   dataset_options=dataset_options)
         stages = mb_config.stages
 
     else:
@@ -677,10 +687,12 @@ def main():
             dataset = MatbenchDataset(
                 docs=mb_loader.train_docs,
                 max_tokens=model_config.max_tokens,
+                cache_tag=f"{args.dataset}_train",
             )
             test_ds = MatbenchDataset(
                 docs=mb_loader.test_docs,
                 max_tokens=model_config.max_tokens,
+                cache_tag=f"{args.dataset}_test",
             )
         else:
             # Tabular: 多行表格 + BallTree 邻居

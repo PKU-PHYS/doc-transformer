@@ -1,11 +1,13 @@
 """
 Matbench 任务训练配方。
 
-每个任务配方包含训练超参和元信息。
+每个任务配方包含训练超参、元信息和数据集选项。
+dataset_options 是通用的 dict，可传递给 MatbenchLoader 和 MatbenchDataset，
+不同数据集可定义自己特有的参数。
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Dict, Any
 
 
 @dataclass
@@ -22,6 +24,10 @@ class MatbenchTaskConfig:
     task_type: str = "regression"
     description: str = ""
     metric: str = "mae"   # Matbench 标准评估指标
+
+    # 数据集特有选项 — 传递给 MatbenchLoader/MatbenchDataset
+    # 例如: {"add_nn_distances": True, "n_neighbors": 2}
+    dataset_options: Dict[str, Any] = field(default_factory=dict)
 
 
 # ═══════════════════════════════════════════════════════════════
