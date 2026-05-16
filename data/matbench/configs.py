@@ -46,7 +46,7 @@ MATBENCH_CONFIGS = {
     ),
 
     "matbench_mp_gap": MatbenchTaskConfig(
-        stages=[StageConfig(name="train", max_epochs=50, patience=10)],
+        stages=[StageConfig(name="train", max_epochs=200, patience=15)],
         description="Band Gap (eV), 106113 samples",
     ),
 

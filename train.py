@@ -577,6 +577,8 @@ def main():
                         help="Path to custom CSV file (overrides --dataset)")
     parser.add_argument("--add-nn", action="store_true", default=False,
                         help="[Matbench] Add nearest-neighbor distances to crystal JSON")
+    parser.add_argument("--warm-restart", action="store_true", default=False,
+                        help="With --resume: only load model weights, discard optimizer/scheduler/RNG")
     args = parser.parse_args()
 
     set_seed(SEED)
@@ -656,7 +658,12 @@ def main():
         print(f"\n  \U0001f504 Resuming from: {args.resume}")
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
-        resume_ckpt = ckpt
+        if args.warm_restart:
+            # Warm restart: 只加载模型权重，optimizer/scheduler/RNG 全部重新初始化
+            resume_ckpt = None
+            print(f"  🔥 Warm restart: loaded weights only (fresh optimizer/scheduler)")
+        else:
+            resume_ckpt = ckpt
         print(f"  \u2705 Loaded. epoch={ckpt.get('epoch', '?')}, "
               f"best_loss={ckpt.get('best_loss', '?')}")
 
