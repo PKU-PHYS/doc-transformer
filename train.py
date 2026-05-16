@@ -494,7 +494,9 @@ def main():
     parser.add_argument("--csv", type=str, default=None,
                         help="Path to custom CSV file (overrides --dataset)")
     parser.add_argument("--add-nn", action="store_true", default=False,
-                        help="[Matbench] Add nearest-neighbor distances to crystal JSON")
+                        help="[Matbench] Add nearest-neighbor distances to crystal JSON (per-site)")
+    parser.add_argument("--add-bonds", action="store_true", default=False,
+                        help="[Matbench] Add global bonds list (unique atom pairs + distances)")
     parser.add_argument("--warm-restart", action="store_true", default=False,
                         help="With --resume: only load model weights, discard optimizer/scheduler/RNG")
     args = parser.parse_args()
@@ -520,6 +522,8 @@ def main():
         dataset_options = dict(mb_config.dataset_options)  # 复制配方默认值
         if args.add_nn:
             dataset_options["add_nn_distances"] = True
+        if args.add_bonds:
+            dataset_options["add_bonds"] = True
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")

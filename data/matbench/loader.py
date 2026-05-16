@@ -22,7 +22,9 @@ from typing import List, Dict, Optional, Tuple
 def structure_to_json(structure, target_val: Optional[float] = None,
                       max_sites: int = 126,
                       add_nn_distances: bool = False,
-                      n_neighbors: int = 2) -> dict:
+                      n_neighbors: int = 2,
+                      add_bonds: bool = False,
+                      max_bonds: int = 50) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -33,8 +35,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         structure:  pymatgen Structure 对象
         target_val: 预测目标值 (训练时提供，测试时为 None)
         max_sites:  最大 site 数量
-        add_nn_distances: 是否添加最近邻距离和元素信息
+        add_nn_distances: 是否添加最近邻距离和元素信息 (per-site)
         n_neighbors: 添加几个最近邻 (默认 2)
+        add_bonds:  是否添加全局 bonds 列表 (去重的原子对 + 距离)
+        max_bonds:  最大 bond 数量 (超过则取最短的)
 
     Returns:
         嵌套 JSON dict
@@ -88,6 +92,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         "sites": sites_data,
     }
 
+    # 全局 bonds 列表
+    if add_bonds and len(structure) > 1:
+        doc["bonds"] = _compute_bonds(structure, max_bonds)
+
     if target_val is not None:
         doc["target"] = round(float(target_val), 6)
 
@@ -123,6 +131,40 @@ def _compute_nn_info(structure, n_neighbors: int) -> Dict[int, List[Tuple[str, f
         ]
 
     return result
+
+
+def _compute_bonds(structure, max_bonds: int) -> List[dict]:
+    """
+    计算晶体中最短的 max_bonds 个原子对。
+
+    每个 bond = {"elements": ["Ti", "O"], "dist": 1.94}
+    全局去重：每个 (i, j) 对只出现一次 (i < j)。
+
+    Returns:
+        List[dict] 按距离排序
+    """
+    n_sites = len(structure)
+    # pymatgen 距离矩阵（考虑周期性）
+    dist_matrix = structure.distance_matrix  # (N, N)
+
+    # 收集上三角的所有 pair (i < j)
+    pairs = []
+    for i in range(n_sites):
+        for j in range(i + 1, n_sites):
+            pairs.append((i, j, dist_matrix[i, j]))
+
+    # 按距离排序，取前 max_bonds 个
+    pairs.sort(key=lambda x: x[2])
+    pairs = pairs[:max_bonds]
+
+    bonds = []
+    for i, j, dist in pairs:
+        bonds.append({
+            "elements": [str(structure[i].specie), str(structure[j].specie)],
+            "dist": round(float(dist), 4),
+        })
+
+    return bonds
 
 
 def _stratified_sample(sites: List[dict], max_n: int) -> List[dict]:
@@ -179,9 +221,12 @@ class MatbenchLoader:
         opts = dataset_options or {}
         add_nn = opts.get("add_nn_distances", False)
         n_nn = opts.get("n_neighbors", 2)
+        add_bonds = opts.get("add_bonds", False)
+        max_bonds = opts.get("max_bonds", 50)
 
         # ── 尝试加载缓存 ──
-        cache_path = self._cache_path(task_name, max_sites, add_nn, n_nn, seed)
+        cache_path = self._cache_path(task_name, max_sites, add_nn, n_nn,
+                                      add_bonds, max_bonds, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -199,9 +244,14 @@ class MatbenchLoader:
         print(f"  ✅ {len(df)} samples loaded")
 
         # ── Structure → JSON ──
-        nn_msg = f", add_nn_distances={add_nn}" if add_nn else ""
+        extras = []
+        if add_nn:
+            extras.append(f"add_nn_distances={add_nn}")
+        if add_bonds:
+            extras.append(f"add_bonds={add_bonds}, max_bonds={max_bonds}")
+        extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
-              f"(max_sites={max_sites}{nn_msg})...")
+              f"(max_sites={max_sites}{extras_msg})...")
         structure_col = self._find_structure_col(df)
         target_col = self._find_target_col(df, structure_col)
 
@@ -215,6 +265,7 @@ class MatbenchLoader:
             doc = structure_to_json(
                 structure, target_val=target, max_sites=max_sites,
                 add_nn_distances=add_nn, n_neighbors=n_nn,
+                add_bonds=add_bonds, max_bonds=max_bonds,
             )
             if len(doc["sites"]) < orig_n:
                 n_truncated += 1
@@ -246,12 +297,14 @@ class MatbenchLoader:
         # ── 保存缓存 ──
         self._save_cache(cache_path)
 
-    def _cache_path(self, task_name, max_sites, add_nn, n_nn, seed):
+    def _cache_path(self, task_name, max_sites, add_nn, n_nn,
+                    add_bonds, max_bonds, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
         nn_tag = f"_nn{n_nn}" if add_nn else ""
-        return cache_dir / f"{task_name}_s{max_sites}{nn_tag}_seed{seed}.pkl"
+        bonds_tag = f"_bonds{max_bonds}" if add_bonds else ""
+        return cache_dir / f"{task_name}_s{max_sites}{nn_tag}{bonds_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
