@@ -31,6 +31,7 @@ from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from data.base import collate_fn
 from data.tabular import TabularDataset, TableLoader
+# Matbench imports are deferred to main() to avoid import overhead
 
 
 SEED = 42
@@ -262,26 +263,67 @@ def _evaluate_rmse(model, test_dataset, model_config, train_config):
     return rmse
 
 
+def _evaluate_mae(model, test_dataset, model_config, train_config):
+    """在 test set 上计算 MAE (Matbench 标准指标)。"""
+    device = train_config.device
+    model.eval()
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=train_config.batch_size,
+        shuffle=False,
+        collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
+        num_workers=0,
+    )
+
+    abs_errors = []
+    with torch.no_grad():
+        for batched_leaves, batched_masks, padding_mask, fork_bias_indices in test_loader:
+            padding_mask = padding_mask.to(device)
+            fork_bias_indices = fork_bias_indices.to(device)
+
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16,
+                                    enabled=(device == "cuda" and torch.cuda.is_bf16_supported())):
+                out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
+
+            for sample_idx in range(len(batched_leaves)):
+                masks = batched_masks[sample_idx]
+                for mask_pos, (true_val, val_type) in masks.items():
+                    if val_type == "number":
+                        mask_repr = out[sample_idx, mask_pos].unsqueeze(0)
+                        pred_val = model.decode_head.predict_number(mask_repr).item()
+                        abs_errors.append(abs(pred_val - float(true_val)))
+
+    model.train()
+
+    if abs_errors:
+        mae = sum(abs_errors) / len(abs_errors)
+    else:
+        mae = float("inf")
+    return mae
+
+
 def train_stage(
     model: DocumentTransformer,
     frozen_lm: FrozenLM,
     stage_name: str,
-    dataset: TabularDataset,
+    dataset,
     max_epochs: int,
     patience: int,
     train_config: TrainConfig,
     model_config: ModelConfig,
-    writer: SummaryWriter = None,
+    writer=None,
     global_step: int = 0,
     checkpoint_interval: int = 5,
     resume_ckpt: dict = None,
-    test_dataset: TabularDataset = None,
+    test_dataset=None,
+    eval_metric: str = "rmse",
 ) -> dict:
     """
     训练单个 Stage，基于 loss plateau 自动结束。
 
     Args:
-        dataset: 数据集实例 (TabularDataset)
+        dataset: 数据集实例 (TabularDataset 或 MatbenchDataset)
         max_epochs: 该 Stage 最大 epoch 数上限
         patience: 连续 N 个 epoch loss 不下降则视为收敛
         resume_ckpt: 恢复用的 checkpoint dict
@@ -293,7 +335,7 @@ def train_stage(
     dataset_size = len(dataset)
     print(f"\n{'='*70}")
     print(f"  {stage_name}")
-    print(f"  n_rows={dataset.n_rows}, dataset_size={dataset_size}")
+    print(f"  n_rows={getattr(dataset, 'n_rows', 1)}, dataset_size={dataset_size}")
     print(f"  max_epochs={max_epochs}, patience={patience}")
     print(f"{'='*70}\n")
 
@@ -404,7 +446,7 @@ def train_stage(
             # ── 每 batch 输出 loss ──
             avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
             lr_now = optimizer.param_groups[0]["lr"]
-            print(f"  [{stage_name}] E{epoch+1:03d} "
+            print(f"  [{time.strftime('%H:%M:%S')}] [{stage_name}] E{epoch+1:03d} "
                   f"B{batch_idx:04d}/{len(loader)} "
                   f"Loss={batch_loss:.6f} "
                   f"tokens={avg_tokens:.0f} "
@@ -444,13 +486,18 @@ def train_stage(
                          sample_idx=0, stage_name=stage_name,
                          epoch=epoch+1, batch_idx=batch_idx)
 
-        # ── Test RMSE 评估 ──
+        # ── Test 评估 ──
         if test_dataset is not None:
-            test_rmse = _evaluate_rmse(model, test_dataset, model_config, train_config)
-            stage_log.setdefault("test_rmse", []).append(test_rmse)
-            print(f"  🎯 Test RMSE: {test_rmse:.4f}")
+            if eval_metric == "mae":
+                test_score = _evaluate_mae(model, test_dataset, model_config, train_config)
+                metric_name = "test_mae"
+            else:
+                test_score = _evaluate_rmse(model, test_dataset, model_config, train_config)
+                metric_name = "test_rmse"
+            stage_log.setdefault(metric_name, []).append(test_score)
+            print(f"  🎯 Test {eval_metric.upper()}: {test_score:.4f}")
             if writer is not None:
-                writer.add_scalar(f"{stage_name}/test_rmse", test_rmse, epoch + 1)
+                writer.add_scalar(f"{stage_name}/{metric_name}", test_score, epoch + 1)
 
         # ── TensorBoard: per-epoch metrics ──
         if writer is not None:
@@ -521,11 +568,11 @@ def save_checkpoint(model, name, checkpoint_dir, log=None,
         print(f"  📄 Log: {log_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Document Transformer on tabular data")
+    parser = argparse.ArgumentParser(description="Train Document Transformer")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint .pth to resume from")
     parser.add_argument("--dataset", type=str, default="california_housing",
-                        help="Dataset name (california_housing, diabetes, wine_quality, covertype)")
+                        help="Dataset name (california_housing, matbench_dielectric, etc.)")
     parser.add_argument("--csv", type=str, default=None,
                         help="Path to custom CSV file (overrides --dataset)")
     args = parser.parse_args()
@@ -535,35 +582,59 @@ def main():
     model_config = ModelConfig()
     train_config = TrainConfig()
 
-    # ── 加载数据集配方 ──
-    from data.tabular.configs import get_dataset_config
-    ds_config = get_dataset_config(args.dataset)
+    is_matbench = args.dataset.startswith("matbench_")
 
-    print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
-          f"H={model_config.n_heads}, ff={model_config.d_ff}")
-    print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
-    print(f"Dataset config: n_rows={ds_config.n_rows}, "
-          f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
+    if is_matbench:
+        # ═══════════════════════════════════════════
+        # Matbench 路径
+        # ═══════════════════════════════════════════
+        from data.matbench import MatbenchLoader, MatbenchDataset
+        from data.matbench.configs import get_matbench_config
 
-    # ── 加载表格数据 ──
-    if args.csv:
-        print(f"\n  📂 Loading CSV: {args.csv}")
-        full_loader = TableLoader.from_csv(args.csv)
+        mb_config = get_matbench_config(args.dataset)
+        eval_metric = mb_config.metric  # "mae"
+
+        print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
+              f"H={model_config.n_heads}, ff={model_config.d_ff}")
+        print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
+        print(f"Matbench task: {args.dataset} — {mb_config.description}")
+        print(f"Eval metric: {eval_metric.upper()}")
+
+        mb_loader = MatbenchLoader(args.dataset)
+        stages = mb_config.stages
+
     else:
-        print(f"\n  📂 Loading dataset: {args.dataset}")
-        full_loader = TableLoader.from_builtin(
-            args.dataset, max_rows=ds_config.max_rows,
-            target_col=ds_config.target_col,
-        )
+        # ═══════════════════════════════════════════
+        # Tabular 路径 (保持不变)
+        # ═══════════════════════════════════════════
+        from data.tabular.configs import get_dataset_config
+        ds_config = get_dataset_config(args.dataset)
+        eval_metric = "rmse"
 
-    print(f"  ✅ {full_loader.n_rows} rows × {full_loader.n_cols} cols")
+        print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
+              f"H={model_config.n_heads}, ff={model_config.d_ff}")
+        print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
+        print(f"Dataset config: n_rows={ds_config.n_rows}, "
+              f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
 
-    # ── 标准 train/test split ──
-    train_loader, test_loader = full_loader.split(test_ratio=0.2, seed=42)
-    table_loader = train_loader  # 训练只用 train split
+        if args.csv:
+            print(f"\n  📂 Loading CSV: {args.csv}")
+            full_loader = TableLoader.from_csv(args.csv)
+        else:
+            print(f"\n  📂 Loading dataset: {args.dataset}")
+            full_loader = TableLoader.from_builtin(
+                args.dataset, max_rows=ds_config.max_rows,
+                target_col=ds_config.target_col,
+            )
 
-    print(f"  Numeric: {table_loader.numeric_cols}")
-    print(f"  Target: {table_loader.target_col}")
+        print(f"  ✅ {full_loader.n_rows} rows × {full_loader.n_cols} cols")
+
+        train_loader, test_loader = full_loader.split(test_ratio=0.2, seed=42)
+        table_loader = train_loader
+
+        print(f"  Numeric: {table_loader.numeric_cols}")
+        print(f"  Target: {table_loader.target_col}")
+        stages = ds_config.stages
 
     device = train_config.device
     frozen_lm = FrozenLM(model_config.frozen_lm_name, device=device)
@@ -594,25 +665,37 @@ def main():
     writer.add_text("config/model", f"d={model_config.d_model}, L={model_config.n_layers}, "
                      f"H={model_config.n_heads}, ff={model_config.d_ff}")
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
-                     f"dataset={args.dataset}, n_rows={ds_config.n_rows}")
+                     f"dataset={args.dataset}")
 
     all_logs = {}
 
     # ── 按配方中的 stages 逐阶段训练 ──
     global_step = 0
-    for stage_idx, stage_cfg in enumerate(ds_config.stages):
-        dataset = TabularDataset(
-            loader=table_loader,
-            n_rows=ds_config.n_rows,
-            mask_ratio=train_config.mask_ratio,
-            max_tokens=model_config.max_tokens,
-        )
-        test_ds = TabularDataset(
-            loader=test_loader,
-            n_rows=ds_config.n_rows,
-            mask_ratio=train_config.mask_ratio,
-            max_tokens=model_config.max_tokens,
-        )
+    for stage_idx, stage_cfg in enumerate(stages):
+        if is_matbench:
+            # Matbench: 每个 doc 是独立嵌套 JSON
+            dataset = MatbenchDataset(
+                docs=mb_loader.train_docs,
+                max_tokens=model_config.max_tokens,
+            )
+            test_ds = MatbenchDataset(
+                docs=mb_loader.test_docs,
+                max_tokens=model_config.max_tokens,
+            )
+        else:
+            # Tabular: 多行表格 + BallTree 邻居
+            dataset = TabularDataset(
+                loader=table_loader,
+                n_rows=ds_config.n_rows,
+                mask_ratio=train_config.mask_ratio,
+                max_tokens=model_config.max_tokens,
+            )
+            test_ds = TabularDataset(
+                loader=test_loader,
+                n_rows=ds_config.n_rows,
+                mask_ratio=train_config.mask_ratio,
+                max_tokens=model_config.max_tokens,
+            )
 
         stage_name = f"{args.dataset}_{stage_cfg.name}"
         log, global_step = train_stage(
@@ -628,6 +711,7 @@ def main():
             global_step=global_step,
             resume_ckpt=resume_ckpt if stage_idx == 0 else None,
             test_dataset=test_ds,
+            eval_metric=eval_metric,
         )
         save_checkpoint(model, f"{stage_cfg.name}_final", train_config.checkpoint_dir, log)
         all_logs[stage_cfg.name] = log

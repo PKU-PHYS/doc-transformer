@@ -10,3 +10,4 @@ checkpoints/
 runs/
 *.pkl
 data/tabular/cache/
+data/matbench/cache/

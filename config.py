@@ -28,7 +28,7 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 256
+    batch_size: int = 64
     lr: float = 1e-4            # AdamW 学习率
     weight_decay: float = 0.01  # AdamW 权重衰减
     betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
