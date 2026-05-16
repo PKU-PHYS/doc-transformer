@@ -9,10 +9,12 @@
 
 import random
 import numpy as np
+import torch
 from typing import List, Dict, Any, Tuple, Optional
 from torch.utils.data import Dataset
 from model.json_parser import LeafNode, JSONParser
 from data.tabular.loader import TableLoader
+from data.base import compute_single_fork_bias
 
 
 class TabularDataset(Dataset):
@@ -75,6 +77,9 @@ class TabularDataset(Dataset):
         for i, (row_pos, col_name) in enumerate(self._leaf_meta):
             if col_name == target_col:
                 self._target_leaf_by_row[row_pos] = i
+
+        # ── 预计算 fork_bias（所有样本路径相同，只需算一次）──
+        self._fork_bias = compute_single_fork_bias(self._template_leaves)
 
     def __len__(self):
         return self.loader.n_rows
@@ -159,4 +164,4 @@ class TabularDataset(Dataset):
                     path_ids=orig.path_ids, group_ids=orig.group_ids,
                 )
 
-        return leaves, target_masks
+        return leaves, target_masks, self._fork_bias

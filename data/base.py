@@ -2,8 +2,8 @@
 数据管线通用组件 — collate_fn + fork_bias 计算。
 
 这些函数与数据源无关，只处理 LeafNode[] → Tensor 的通用逻辑。
-任何 Dataset 只要 __getitem__ 返回 (List[LeafNode], Dict[int, Any])，
-就可以使用这里的 collate_fn 构建 batch。
+所有 Dataset 的 __getitem__ 返回 (List[LeafNode], Dict[int, Any], Tensor)，
+其中第三个元素是预计算的 fork_bias 矩阵。
 """
 
 import torch
@@ -61,17 +61,52 @@ def compute_fork_bias_indices(path_ids: torch.Tensor,
                        torch.zeros_like(fork_level))
 
 
+def compute_single_fork_bias(leaves: List[LeafNode]) -> torch.Tensor:
+    """
+    计算单个样本的 fork bias 矩阵。
+
+    由于每个样本的路径在训练过程中不变，可在预解析阶段调用一次并缓存，
+    避免 collate_fn 中每 batch 重复计算 O(B*T²*D) 的开销。
+
+    Args:
+        leaves: 单个样本的叶子节点列表
+
+    Returns:
+        (T, T) int8 张量 — fork bias 索引矩阵
+    """
+    T = len(leaves)
+    if T == 0:
+        return torch.zeros(0, 0, dtype=torch.int8)
+
+    max_path_len = max(len(l.path_ids) for l in leaves)
+    if max_path_len == 0:
+        return torch.zeros(T, T, dtype=torch.int8)
+
+    path_ids = torch.zeros(1, T, max_path_len, dtype=torch.long)
+    is_group = torch.zeros(1, T, max_path_len, dtype=torch.long)
+    valid_lens = torch.zeros(1, T, dtype=torch.long)
+
+    for i, leaf in enumerate(leaves):
+        L = len(leaf.path_ids)
+        valid_lens[0, i] = L
+        if L > 0:
+            path_ids[0, i, :L] = torch.tensor(leaf.path_ids, dtype=torch.long)
+            is_group[0, i, :L] = torch.tensor(leaf.path_types, dtype=torch.long)
+
+    result = compute_fork_bias_indices(path_ids, is_group, valid_lens)
+    return result[0].to(torch.int8)
+
+
 # ═══════════════════════════════════════════════════════════════
 # §2  Collate 函数
 # ═══════════════════════════════════════════════════════════════
 
-def collate_fn(batch: List[Tuple[List[LeafNode], Dict[int, Any]]],
-               max_tokens: int = 512):
+def collate_fn(batch, max_tokens: int = 512):
     """
-    处理变长 Batch，生成 padding mask 和 fork bias 矩阵。
+    处理变长 Batch，生成 padding mask 并组装预计算的 fork bias 矩阵。
 
     Args:
-        batch: List of (leaves, target_masks) from Dataset.__getitem__
+        batch: List of (leaves, target_masks, fork_bias) from Dataset.__getitem__
         max_tokens: 截断阈值
 
     Returns:
@@ -79,38 +114,26 @@ def collate_fn(batch: List[Tuple[List[LeafNode], Dict[int, Any]]],
     """
     batched_leaves = []
     batched_masks = []
+    fork_bias_list = []
 
     # 双重保护：collate 层再做一次截断
-    max_len = min(max(len(leaves) for leaves, _ in batch), max_tokens)
+    max_len = min(max(len(item[0]) for item in batch), max_tokens)
     B = len(batch)
 
     padding_mask = torch.ones((B, max_len), dtype=torch.bool)
 
-    for b, (leaves, masks) in enumerate(batch):
+    for b, (leaves, masks, fork_bias) in enumerate(batch):
         truncated_leaves = leaves[:max_len]
         truncated_masks = {k: v for k, v in masks.items() if k < max_len}
         batched_leaves.append(truncated_leaves)
         batched_masks.append(truncated_masks)
         padding_mask[b, :len(truncated_leaves)] = False
+        fork_bias_list.append(fork_bias)
 
-    # ── 计算 fork bias 矩阵 ──
-    max_path_len = 1
-    for leaves_list in batched_leaves:
-        for leaf in leaves_list:
-            max_path_len = max(max_path_len, len(leaf.path_ids))
-
-    path_ids_t = torch.zeros(B, max_len, max_path_len, dtype=torch.long)
-    is_group_t = torch.zeros(B, max_len, max_path_len, dtype=torch.long)
-    valid_path_lens_t = torch.zeros(B, max_len, dtype=torch.long)
-
-    for b, leaves_list in enumerate(batched_leaves):
-        for i, leaf in enumerate(leaves_list):
-            L = len(leaf.path_ids)
-            valid_path_lens_t[b, i] = L
-            if L > 0:
-                path_ids_t[b, i, :L] = torch.tensor(leaf.path_ids, dtype=torch.long)
-                is_group_t[b, i, :L] = torch.tensor(leaf.path_types, dtype=torch.long)
-
-    fork_bias_indices = compute_fork_bias_indices(path_ids_t, is_group_t, valid_path_lens_t)
+    # ── 组装 fork bias 矩阵：pad + stack 预计算结果 ──
+    fork_bias_indices = torch.zeros(B, max_len, max_len, dtype=torch.long)
+    for b, fb in enumerate(fork_bias_list):
+        t = min(fb.size(0), max_len)
+        fork_bias_indices[b, :t, :t] = fb[:t, :t].long()
 
     return batched_leaves, batched_masks, padding_mask, fork_bias_indices

@@ -321,16 +321,16 @@ def train_stage(
         "reason": "",
     }
 
+    # num_workers=0：预计算 fork_bias 后 collate 极轻量（pad+stack），
+    # 多进程 fork 反而因 COW 复制预解析数据集（数百万 Python 对象）而严重拖慢启动
     loader = DataLoader(
         dataset,
         batch_size=train_config.batch_size,
         shuffle=True,
         collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-        num_workers=4,
-        persistent_workers=True,
+        num_workers=0,
     )
 
-    # Test DataLoader: 创建一次，每个 epoch 复用（避免每次都 fork worker）
     test_loader = None
     if test_dataset is not None:
         test_loader = DataLoader(
@@ -338,8 +338,7 @@ def train_stage(
             batch_size=train_config.batch_size,
             shuffle=False,
             collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-            num_workers=4,
-            persistent_workers=True,
+            num_workers=0,
         )
 
     for epoch in range(start_epoch, max_epochs):
