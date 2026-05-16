@@ -31,6 +31,7 @@ from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from data.base import collate_fn
 from data.tabular import TabularDataset, TableLoader
+from eval import evaluate
 # Matbench imports are deferred to main() to avoid import overhead
 
 
@@ -220,87 +221,7 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
     print(f"  {'─'*60}\n")
 
 
-def _evaluate_rmse(model, test_dataset, model_config, train_config):
-    """在 test set 上计算 RMSE。"""
-    import math
-    device = train_config.device
-    model.eval()
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=train_config.batch_size,
-        shuffle=False,
-        collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-        num_workers=0,
-    )
-
-    squared_errors = []
-    with torch.no_grad():
-        for batched_leaves, batched_masks, padding_mask, fork_bias_indices in test_loader:
-            padding_mask = padding_mask.to(device)
-            fork_bias_indices = fork_bias_indices.to(device)
-
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16,
-                                    enabled=(device == "cuda" and torch.cuda.is_bf16_supported())):
-                out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
-
-            # 提取每个样本的 mask 预测
-            for sample_idx in range(len(batched_leaves)):
-                masks = batched_masks[sample_idx]
-                for mask_pos, (true_val, val_type) in masks.items():
-                    if val_type == "number":
-                        mask_repr = out[sample_idx, mask_pos].unsqueeze(0)
-                        pred_val = model.decode_head.predict_number(mask_repr).item()
-                        err = (pred_val - float(true_val)) ** 2
-                        squared_errors.append(err)
-
-    model.train()
-
-    if squared_errors:
-        rmse = math.sqrt(sum(squared_errors) / len(squared_errors))
-    else:
-        rmse = float("inf")
-    return rmse
-
-
-def _evaluate_mae(model, test_dataset, model_config, train_config):
-    """在 test set 上计算 MAE (Matbench 标准指标)。"""
-    device = train_config.device
-    model.eval()
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=train_config.batch_size,
-        shuffle=False,
-        collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-        num_workers=0,
-    )
-
-    abs_errors = []
-    with torch.no_grad():
-        for batched_leaves, batched_masks, padding_mask, fork_bias_indices in test_loader:
-            padding_mask = padding_mask.to(device)
-            fork_bias_indices = fork_bias_indices.to(device)
-
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16,
-                                    enabled=(device == "cuda" and torch.cuda.is_bf16_supported())):
-                out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
-
-            for sample_idx in range(len(batched_leaves)):
-                masks = batched_masks[sample_idx]
-                for mask_pos, (true_val, val_type) in masks.items():
-                    if val_type == "number":
-                        mask_repr = out[sample_idx, mask_pos].unsqueeze(0)
-                        pred_val = model.decode_head.predict_number(mask_repr).item()
-                        abs_errors.append(abs(pred_val - float(true_val)))
-
-    model.train()
-
-    if abs_errors:
-        mae = sum(abs_errors) / len(abs_errors)
-    else:
-        mae = float("inf")
-    return mae
 
 
 def train_stage(
@@ -400,17 +321,17 @@ def train_stage(
         "reason": "",
     }
 
+    loader = DataLoader(
+        dataset,
+        batch_size=train_config.batch_size,
+        shuffle=True,
+        collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
+        num_workers=4,
+        persistent_workers=True,
+    )
+
     for epoch in range(start_epoch, max_epochs):
         epoch_start = time.time()
-
-        loader = DataLoader(
-            dataset,
-            batch_size=train_config.batch_size,
-            shuffle=True,
-            collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-            num_workers=4,
-            persistent_workers=True,
-        )
 
         model.train()
         epoch_loss = 0.0
@@ -488,12 +409,9 @@ def train_stage(
 
         # ── Test 评估 ──
         if test_dataset is not None:
-            if eval_metric == "mae":
-                test_score = _evaluate_mae(model, test_dataset, model_config, train_config)
-                metric_name = "test_mae"
-            else:
-                test_score = _evaluate_rmse(model, test_dataset, model_config, train_config)
-                metric_name = "test_rmse"
+            test_score = evaluate(model, test_dataset, model_config, train_config,
+                                 metric=eval_metric)
+            metric_name = f"test_{eval_metric}"
             stage_log.setdefault(metric_name, []).append(test_score)
             print(f"  🎯 Test {eval_metric.upper()}: {test_score:.4f}")
             if writer is not None:
