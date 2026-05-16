@@ -328,7 +328,7 @@ def train_stage(
         batch_size=train_config.batch_size,
         shuffle=True,
         collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-        num_workers=0,
+        num_workers=train_config.num_workers,
     )
 
     test_loader = None

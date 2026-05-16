@@ -34,5 +34,6 @@ class TrainConfig:
     betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
     mask_ratio: float = 0.15    # 自监督掩码比例
     device: str = "cuda"
+    num_workers: int = 0        # DataLoader 进程数 (0=主进程，避免 fork COW 开销)
     
     checkpoint_dir: str = "checkpoints"
