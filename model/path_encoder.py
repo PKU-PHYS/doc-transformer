@@ -43,35 +43,28 @@ class GRUPathEncoder(nn.Module):
         N = path_text_embs.size(0)
         device = self.h0.device
         d_model = self.gru.hidden_size
-        out = torch.zeros(N, d_model, device=device)
 
         if N == 0:
-            return out
+            return torch.zeros(N, d_model, device=device)
 
         # 融合节点类型信息到文本特征
         type_bias = self.node_type_emb(path_types)       # (N, max_L, frozen_lm_dim)
         fused_input = path_text_embs + type_bias          # (N, max_L, frozen_lm_dim)
 
-        # 筛选有效路径（长度 > 0）
-        valid_mask = valid_lens > 0
-        valid_indices = valid_mask.nonzero(as_tuple=True)[0]
+        # Padded GRU：直接在规整张量上跑，让 cuDNN 使用批量并行 kernel
+        # （比 pack_sequence 的 backward 快 ~1000x）
+        h0 = self.h0.expand(1, N, -1).contiguous()
+        gru_out, _ = self.gru(fused_input, h0)  # (N, max_L, d_model)
 
-        if len(valid_indices) == 0:
-            return out
+        # 取每条路径最后一个 *真实* 位置的隐藏状态
+        # GRU 是因果的，位置 t 只取决于 0..t，所以与 pack_sequence 结果完全一致
+        last_idx = (valid_lens - 1).clamp(min=0)  # (N,)
+        gather_idx = last_idx.unsqueeze(-1).unsqueeze(-1).expand(N, 1, d_model)
+        out = gru_out.gather(1, gather_idx).squeeze(1)  # (N, d_model)
 
-        # 抽取有效路径，构建 pack_sequence 所需的张量列表
-        valid_seqs = []
-        for idx in valid_indices:
-            L = valid_lens[idx].item()
-            valid_seqs.append(fused_input[idx, :L])  # (L, frozen_lm_dim)
-
-        packed_input = nn.utils.rnn.pack_sequence(valid_seqs, enforce_sorted=False)
-        h0 = self.h0.expand(1, len(valid_indices), -1).contiguous()
-
-        _, hn = self.gru(packed_input, h0)  # hn: (1, n_valid, d_model)
-
-        # 将结果填回对应位置
-        for i, orig_idx in enumerate(valid_indices):
-            out[orig_idx] = hn[0, i]
+        # valid_lens=0 的路径输出零向量
+        zero_mask = (valid_lens == 0)
+        if zero_mask.any():
+            out = out.masked_fill(zero_mask.unsqueeze(-1), 0.0)
 
         return out
