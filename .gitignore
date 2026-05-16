@@ -3,7 +3,7 @@ __pycache__/
 *.pyo
 .pixi/
 pixi.lock
-checkpoints/
+checkpoints*/
 *.pt
 *.pth
 .pytest_cache/runs/

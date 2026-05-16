@@ -612,16 +612,23 @@ def main():
     global_step = 0
     for stage_idx, stage_cfg in enumerate(stages):
         if is_matbench:
+            # 构建含选项的 cache_tag，避免不同选项共用缓存
+            opts_tag = ""
+            if dataset_options.get("add_nn_distances"):
+                opts_tag += "_nn"
+            if dataset_options.get("add_bonds"):
+                opts_tag += "_bonds"
+
             # Matbench: 每个 doc 是独立嵌套 JSON
             dataset = MatbenchDataset(
                 docs=mb_loader.train_docs,
                 max_tokens=model_config.max_tokens,
-                cache_tag=f"{args.dataset}_train",
+                cache_tag=f"{args.dataset}{opts_tag}_train",
             )
             test_ds = MatbenchDataset(
                 docs=mb_loader.test_docs,
                 max_tokens=model_config.max_tokens,
-                cache_tag=f"{args.dataset}_test",
+                cache_tag=f"{args.dataset}{opts_tag}_test",
             )
         else:
             # Tabular: 多行表格 + BallTree 邻居
