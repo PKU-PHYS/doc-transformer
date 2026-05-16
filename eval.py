@@ -7,37 +7,23 @@
 """
 
 import math
-import functools
 import torch
-from torch.utils.data import DataLoader
-from data.base import collate_fn
 
 
-def evaluate(model, test_dataset, model_config, train_config, metric="mae"):
+def evaluate(model, test_loader, device, metric="mae"):
     """
     在 test set 上评估模型。
 
     Args:
-        model:        DocumentTransformer 模型
-        test_dataset: Dataset (MatbenchDataset 或 TabularDataset)
-        model_config: ModelConfig
-        train_config: TrainConfig
-        metric:       "mae" 或 "rmse"
+        model:       DocumentTransformer 模型
+        test_loader: 预创建的 DataLoader（外部管理生命周期）
+        device:      设备
+        metric:      "mae" 或 "rmse"
 
     Returns:
         float: 评估指标值
     """
-    device = train_config.device
     model.eval()
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=train_config.batch_size,
-        shuffle=False,
-        collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
-        num_workers=4,
-        persistent_workers=False,
-    )
 
     errors = []
     with torch.no_grad():

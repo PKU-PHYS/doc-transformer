@@ -330,6 +330,18 @@ def train_stage(
         persistent_workers=True,
     )
 
+    # Test DataLoader: 创建一次，每个 epoch 复用（避免每次都 fork worker）
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=train_config.batch_size,
+            shuffle=False,
+            collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
+            num_workers=4,
+            persistent_workers=True,
+        )
+
     for epoch in range(start_epoch, max_epochs):
         epoch_start = time.time()
 
@@ -408,9 +420,8 @@ def train_stage(
                          epoch=epoch+1, batch_idx=batch_idx)
 
         # ── Test 评估 ──
-        if test_dataset is not None:
-            test_score = evaluate(model, test_dataset, model_config, train_config,
-                                 metric=eval_metric)
+        if test_loader is not None:
+            test_score = evaluate(model, test_loader, device, metric=eval_metric)
             metric_name = f"test_{eval_metric}"
             stage_log.setdefault(metric_name, []).append(test_score)
             print(f"  🎯 Test {eval_metric.upper()}: {test_score:.4f}")
