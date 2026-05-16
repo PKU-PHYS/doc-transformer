@@ -17,7 +17,7 @@ from config import ModelConfig
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from model.json_parser import LeafNode, JSONParser
-from data.base import compute_fork_bias_indices
+from data.base import compute_single_fork_bias
 
 
 def _find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]:
@@ -30,29 +30,6 @@ def _find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str
     # 按修改时间倒序，取最新的
     return max(pth_files, key=os.path.getmtime)
 
-
-def build_fork_bias(leaves_batch: List[List[LeafNode]], device) -> torch.Tensor:
-    """为推理构建 fork bias 矩阵。"""
-    B = len(leaves_batch)
-    max_len = max(len(l) for l in leaves_batch)
-    max_path_len = max(
-        len(leaf.path_ids)
-        for leaves in leaves_batch for leaf in leaves
-    ) if max_len > 0 else 1
-
-    path_ids_t = torch.zeros(B, max_len, max_path_len, dtype=torch.long)
-    is_group_t = torch.zeros(B, max_len, max_path_len, dtype=torch.long)
-    valid_path_lens_t = torch.zeros(B, max_len, dtype=torch.long)
-
-    for b, leaves in enumerate(leaves_batch):
-        for i, leaf in enumerate(leaves):
-            L = len(leaf.path_ids)
-            valid_path_lens_t[b, i] = L
-            if L > 0:
-                path_ids_t[b, i, :L] = torch.tensor(leaf.path_ids, dtype=torch.long)
-                is_group_t[b, i, :L] = torch.tensor(leaf.path_types, dtype=torch.long)
-
-    return compute_fork_bias_indices(path_ids_t, is_group_t, valid_path_lens_t).to(device)
 
 
 def predict(model, frozen_lm, doc, device, root_name: str = "doc"):
@@ -87,7 +64,7 @@ def predict(model, frozen_lm, doc, device, root_name: str = "doc"):
     # 构建 padding mask 和 fork bias
     seq_len = len(leaves)
     padding_mask = torch.zeros((1, seq_len), dtype=torch.bool, device=device)
-    fork_bias = build_fork_bias([leaves], device)
+    fork_bias = compute_single_fork_bias(leaves).long().unsqueeze(0).to(device)
 
     # 前向推理
     with torch.no_grad():

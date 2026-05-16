@@ -106,6 +106,7 @@ class ValueEncoder(nn.Module):
         # ── 数值型：Base-2 torch.frexp 向量化编码 ──
         if num_indices:
             raw = torch.tensor(num_vals, dtype=torch.float32, device=device)
+            raw = torch.nan_to_num(raw, nan=0.0, posinf=1e6, neginf=-1e6)
             m_tensor, e_tensor = torch.frexp(raw)
             # m_tensor ∈ [0.5, 1.0) 或 (-1.0, -0.5]，x=0 时 m=0
             # e_tensor 为整数指数，x = m * 2^e
