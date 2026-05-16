@@ -61,13 +61,14 @@ class TokenEmbedding(nn.Module):
         if all_unique_texts:
             unique_list = list(all_unique_texts)
             unique_embs = frozen_lm.encode(unique_list)  # (K, lm_dim) — 单次调用
-            text_lookup = {t: unique_embs[j] for j, t in enumerate(unique_list)}
+            text_to_idx = {t: j for j, t in enumerate(unique_list)}
         else:
-            text_lookup = {}
+            unique_embs = None
+            text_to_idx = {}
 
         # ── 第二步：值编码 ──
         if str_values:
-            lm_value_embs = torch.stack([text_lookup[s] for s in str_values])
+            lm_value_embs = unique_embs[[text_to_idx[s] for s in str_values]]
         else:
             lm_value_embs = None
 
@@ -75,23 +76,44 @@ class TokenEmbedding(nn.Module):
         raw_values = [l.value for l in leaves]
         val_embs = self.value_encoder(node_types, raw_values, lm_embeddings=lm_value_embs)
         
-        # ── 第三步：路径编码（MLP Fusion） ──
+        # ── 第三步：路径编码 — 全量批构建，零逐元素 CUDA 操作 ──
         lm_dim = frozen_lm.dim()
         max_path_len = max(len(l.path) for l in leaves) if leaves else 0
         
-        path_text_embs = torch.zeros(N, max_path_len, lm_dim, device=device)
-        path_depths = torch.zeros(N, max_path_len, dtype=torch.long, device=device)
-        path_types = torch.zeros(N, max_path_len, dtype=torch.long, device=device)
-        valid_lens = torch.zeros(N, dtype=torch.long, device=device)
+        # 在 Python 侧收集所有数据为普通列表，最后一次性创建张量
+        # (a) path_types: 构建 (N, max_path_len) 的扁平列表
+        types_data = []
+        for leaf in leaves:
+            L = len(leaf.path_types)
+            types_data.extend(leaf.path_types)
+            types_data.extend([0] * (max_path_len - L))  # padding
+        
+        path_types = torch.tensor(types_data, dtype=torch.long, device=device
+                                  ).reshape(N, max_path_len)
+        
+        # (b) valid_lens
+        lens_data = [len(leaf.path) for leaf in leaves]
+        valid_lens = torch.tensor(lens_data, dtype=torch.long, device=device)
+        
+        # (c) path_text_embs: 用高级索引一次性填充
+        #     收集所有 (row, col, text_idx) 三元组
+        row_indices = []
+        col_indices = []
+        emb_indices = []
         
         for i, leaf in enumerate(leaves):
-            L = len(leaf.path)
-            valid_lens[i] = L
-            if L > 0:
-                path_depths[i, :L] = torch.arange(L, device=device)
-                path_types[i, :L] = torch.tensor(leaf.path_types, dtype=torch.long, device=device)
-                for j, text in enumerate(leaf.path):
-                    path_text_embs[i, j] = text_lookup[text]
+            for j, text in enumerate(leaf.path):
+                row_indices.append(i)
+                col_indices.append(j)
+                emb_indices.append(text_to_idx[text])
+        
+        path_text_embs = torch.zeros(N, max_path_len, lm_dim, device=device)
+        if row_indices:
+            # 一次性高级索引赋值 → 1 次 CUDA 操作代替 N×L 次
+            path_text_embs[row_indices, col_indices] = unique_embs[emb_indices]
+        
+        # path_depths 未被 GRU 实际使用，传零张量
+        path_depths = torch.zeros(N, max_path_len, dtype=torch.long, device=device)
         
         path_embs = self.path_encoder(path_text_embs, path_depths, path_types, valid_lens)
         
