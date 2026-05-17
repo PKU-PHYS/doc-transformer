@@ -21,10 +21,10 @@ from typing import List, Dict, Optional, Tuple
 # ═══════════════════════════════════════════════════════════════
 
 def structure_to_json(structure, target_val: Optional[float] = None,
-                      max_sites: int = 126,
+                      max_tokens: int = 256,
                       add_angles: bool = False,
                       add_bonds: bool = False,
-                      max_bonds: int = 50,
+                      max_bonds: int = 32,
                       add_composition: bool = False,
                       no_coords: bool = False,
                       add_ewald: bool = False) -> dict:
@@ -33,11 +33,12 @@ def structure_to_json(structure, target_val: Optional[float] = None,
 
     精简策略：只保留对属性预测有用的字段。
     截断策略：primitive cell → 按元素分层采样。
+    Token 预算：sites 优先占用，bonds 用剩余预算。
 
     Args:
         structure:  pymatgen Structure 对象
         target_val: 预测目标值 (训练时提供，测试时为 None)
-        max_sites:  最大 site 数量
+        max_tokens: Token 预算上限（动态计算 max_sites）
         add_angles: 是否添加 per-site 配位统计 (cn, avg_angle, min_angle)
         add_bonds:  是否添加全局 bonds 列表 (去重的原子对 + 距离)
         max_bonds:  最大 bond 数量 (超过则取最短的)
@@ -49,6 +50,30 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     Returns:
         嵌套 JSON dict
     """
+    # ── Step 0: 动态计算 token 预算（bonds 保底，sites 用剩余）──
+    # 对大结构：bonds 的距离信息密度 > sites 的坐标信息密度
+    # 对小结构：两者都能装下，不受影响
+    tokens_per_site = 1  # element
+    if not no_coords:
+        tokens_per_site += 3  # x, y, z
+    if add_angles:
+        tokens_per_site += 3  # cn, avg_angle, min_angle
+    if add_ewald:
+        tokens_per_site += 1  # ewald_energy
+
+    tokens_per_bond = 3  # elements(2) + dist(1)
+
+    fixed_overhead = 7  # lattice(6) + target(1)
+    if add_composition:
+        n_unique = len(set(str(site.specie) for site in structure))
+        fixed_overhead += n_unique * 2  # 每种元素 = 2 tokens (element + ratio)
+
+    # Bonds 保底：先预留 bonds 预算
+    bonds_budget = max_bonds * tokens_per_bond if add_bonds else 0
+
+    # Sites 用剩余预算
+    max_sites = max(1, (max_tokens - fixed_overhead - bonds_budget) // tokens_per_site)
+
     # ── Step 1: 尝试缩到 primitive cell ──
     if len(structure) > max_sites:
         try:
@@ -118,9 +143,13 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     else:
         doc["sites"] = sites_data
 
-    # 全局 bonds 列表
+    # Bonds：用保底预算 + 小结构释放的 site 名额
     if add_bonds and len(structure) > 1:
-        doc["bonds"] = _compute_bonds(structure, max_bonds)
+        tokens_used = fixed_overhead + len(sites_data) * tokens_per_site
+        remaining = max_tokens - tokens_used
+        effective_max_bonds = min(max_bonds, max(0, remaining // tokens_per_bond))
+        if effective_max_bonds > 0:
+            doc["bonds"] = _compute_bonds(structure, effective_max_bonds)
 
     # 元素比例数组 — 用数组格式使元素名作为叶子值而非 path key
     if add_composition:
@@ -326,24 +355,24 @@ class MatbenchLoader:
         target_key:  预测目标的 key 名 ("target")
     """
 
-    def __init__(self, task_name: str, max_sites: int = 126,
+    def __init__(self, task_name: str, max_tokens: int = 256,
                  test_ratio: float = 0.2, seed: int = 42,
                  dataset_options: dict = None):
         self.task_name = task_name
-        self.max_sites = max_sites
+        self.max_tokens = max_tokens
         self.target_key = "target"
 
         # 解析 dataset_options
         opts = dataset_options or {}
         add_angles = opts.get("add_angles", False)
         add_bonds = opts.get("add_bonds", False)
-        max_bonds = opts.get("max_bonds", 50)
+        max_bonds = opts.get("max_bonds", 32)
         add_composition = opts.get("add_composition", False)
         no_coords = opts.get("no_coords", False)
         add_ewald = opts.get("add_ewald", False)
 
         # ── 尝试加载缓存 ──
-        cache_path = self._cache_path(task_name, max_sites, add_angles,
+        cache_path = self._cache_path(task_name, max_tokens, add_angles,
                                       add_bonds, max_bonds,
                                       add_composition, no_coords,
                                       add_ewald, seed)
@@ -377,7 +406,7 @@ class MatbenchLoader:
             extras.append("add_ewald")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
-              f"(max_sites={max_sites}{extras_msg})...")
+              f"(max_tokens={max_tokens}{extras_msg})...")
         structure_col = self._find_structure_col(df)
         target_col = self._find_target_col(df, structure_col)
 
@@ -389,7 +418,7 @@ class MatbenchLoader:
 
             orig_n = len(structure)
             doc = structure_to_json(
-                structure, target_val=target, max_sites=max_sites,
+                structure, target_val=target, max_tokens=max_tokens,
                 add_angles=add_angles,
                 add_bonds=add_bonds, max_bonds=max_bonds,
                 add_composition=add_composition,
@@ -406,7 +435,7 @@ class MatbenchLoader:
 
         if n_truncated > 0:
             print(f"  ⚠️  {n_truncated}/{len(docs)} structures truncated "
-                  f"(>{max_sites} sites after primitive cell)")
+                  f"(dynamic max_sites, token budget={max_tokens})")
 
         # ── Train/Test split ──
         from sklearn.model_selection import train_test_split
@@ -430,7 +459,7 @@ class MatbenchLoader:
         # ── 保存缓存 ──
         self._save_cache(cache_path)
 
-    def _cache_path(self, task_name, max_sites, add_angles,
+    def _cache_path(self, task_name, max_tokens, add_angles,
                     add_bonds, max_bonds, add_composition, no_coords,
                     add_ewald, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
@@ -441,7 +470,7 @@ class MatbenchLoader:
         comp_tag = "_comp" if add_composition else ""
         nocoords_tag = "_nocoords" if no_coords else ""
         ewald_tag = "_ewald" if add_ewald else ""
-        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}_seed{seed}.pkl"
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""

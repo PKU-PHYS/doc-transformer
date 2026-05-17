@@ -541,6 +541,7 @@ def main():
             print(f"Dataset options: {dataset_options}")
 
         mb_loader = MatbenchLoader(args.dataset,
+                                   max_tokens=model_config.max_tokens,
                                    dataset_options=dataset_options)
         stages = mb_config.stages
 

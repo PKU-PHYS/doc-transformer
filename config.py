@@ -7,7 +7,7 @@ class ModelConfig:
     n_heads: int = 4            # Small: 注意力头数 (每个头 48 维)
     d_ff: int = 768             # Small: FFN 中间层维度
     dropout: float = 0.1
-    max_tokens: int = 512       # 截断阈值，单样本最大 token 数
+    max_tokens: int = 256       # 截断阈值，单样本最大 token 数
     
     # Frozen LM 配置
     frozen_lm_name: str = "sentence-transformers/all-MiniLM-L6-v2"
