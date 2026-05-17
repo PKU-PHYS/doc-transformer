@@ -74,7 +74,7 @@ class TableLoader:
     核心功能：
       1. 加载数据 → 分离数值/类别列
       2. 标准化数值列 → 构建 BallTree
-      3. query_neighbors(): 给定 seed 行 + 排除列，找 K 近邻
+      3. precompute_neighbors(): 批量预计算所有行的 K 近邻
 
     Attributes:
         df:           原始 DataFrame
@@ -139,42 +139,23 @@ class TableLoader:
         print(f"  💾 BallTree cached: {cache_path}")
         return tree
 
-    def query_neighbors(self, seed_idx: int, exclude_col: Optional[str],
-                        k: int) -> np.ndarray:
+    def precompute_neighbors(self, k: int) -> np.ndarray:
         """
-        Query-aware 邻居选择。
-
-        用 seed 行的非 exclude_col 数值列作为 query，返回 K 近邻索引。
-        exclude_col 通常是被 mask 的列，排除后避免信息泄露。
+        批量预计算所有行的 K 近邻索引。
 
         Args:
-            seed_idx:    seed 行索引
-            exclude_col: 要排除的列名 (mask 目标列)
-            k:           邻居数量
+            k: 每行的邻居数量
 
         Returns:
-            np.ndarray of shape (k,) 邻居行索引 (不含 seed 本身)
+            np.ndarray of shape (n_rows, k)，每行是 K 个邻居的行索引
         """
-        # 构建 query 向量 (排除 mask 列)
-        query_cols = [c for c in self.numeric_cols if c != exclude_col]
-        if not query_cols:
-            query_cols = self.numeric_cols  # fallback
-
-        col_indices = [self.numeric_cols.index(c) for c in query_cols]
-        query_vec = self._numeric_matrix[seed_idx, col_indices].reshape(1, -1)
-
-        # BallTree query — 需要用同样的列子集
-        # 为了避免每次重建 tree，我们用全列 tree + 欧氏距离近似
-        # 这在高维下近似合理，且避免每个 exclude_col 都建一棵树
-        _, indices = self._tree.query(
-            self._numeric_matrix[seed_idx].reshape(1, -1),
-            k=k + 1  # +1 因为包含 seed 本身
-        )
-
-        # 排除 seed 本身
-        neighbors = indices[0]
-        neighbors = neighbors[neighbors != seed_idx][:k]
-        return neighbors
+        dists, indices = self._tree.query(self._numeric_matrix, k=k + 1)
+        # indices 包含自己，去掉
+        result = np.zeros((self.n_rows, k), dtype=np.int64)
+        for i in range(self.n_rows):
+            neigh = indices[i][indices[i] != i][:k]
+            result[i] = neigh
+        return result
 
     def get_row_dict(self, idx: int) -> dict:
         """返回第 idx 行的 flat dict，数值和类别都包含。"""

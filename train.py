@@ -651,13 +651,11 @@ def main():
             dataset = TabularDataset(
                 loader=table_loader,
                 n_rows=ds_config.n_rows,
-                mask_ratio=train_config.mask_ratio,
                 max_tokens=model_config.max_tokens,
             )
             test_ds = TabularDataset(
                 loader=test_loader,
                 n_rows=ds_config.n_rows,
-                mask_ratio=train_config.mask_ratio,
                 max_tokens=model_config.max_tokens,
             )
 
