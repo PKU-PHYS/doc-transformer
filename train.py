@@ -598,11 +598,16 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
 
-    # ── 构建 checkpoint 子目录：checkpoints/{dataset}_{timestamp}/ ──
-    run_name = time.strftime("%Y%m%d_%H%M%S")
+    # ── 构建 run_name：{dataset}{opts_tag}_{timestamp} ──
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    opts_tag = ""
+    if is_matbench:
+        from data.matbench.configs import build_cache_tag
+        opts_tag = build_cache_tag(dataset_options)
+    run_name = f"{args.dataset}{opts_tag}_{timestamp}"
     if args.resume:
         run_name += "_resumed"
-    checkpoint_dir = os.path.join(train_config.checkpoint_dir, f"{args.dataset}_{run_name}")
+    checkpoint_dir = os.path.join(train_config.checkpoint_dir, run_name)
     os.makedirs(checkpoint_dir, exist_ok=True)
     print(f"Checkpoint dir: {checkpoint_dir}")
 
@@ -615,6 +620,9 @@ def main():
                      f"H={model_config.n_heads}, ff={model_config.d_ff}")
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
                      f"dataset={args.dataset}")
+    if is_matbench:
+        opts_str = ", ".join(f"{k}={v}" for k, v in sorted(dataset_options.items())) or "default"
+        writer.add_text("config/dataset_options", opts_str)
 
     all_logs = {}
 
