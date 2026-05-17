@@ -509,6 +509,8 @@ def main():
                         help="[Matbench] Add global bonds list (unique atom pairs + distances)")
     parser.add_argument("--add-composition", action="store_true", default=False,
                         help="[Matbench] Add element ratio array [{element, ratio}]")
+    parser.add_argument("--no-sites", action="store_true", default=False,
+                        help="[Matbench] Remove per-site absolute coords, keep only relative features")
     parser.add_argument("--warm-restart", action="store_true", default=False,
                         help="With --resume: only load model weights, discard optimizer/scheduler/RNG")
     args = parser.parse_args()
@@ -538,6 +540,8 @@ def main():
             dataset_options["add_bonds"] = True
         if args.add_composition:
             dataset_options["add_composition"] = True
+        if args.no_sites:
+            dataset_options["no_sites"] = True
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
@@ -634,6 +638,8 @@ def main():
                 opts_tag += "_bonds"
             if dataset_options.get("add_composition"):
                 opts_tag += "_comp"
+            if dataset_options.get("no_sites"):
+                opts_tag += "_nosites"
 
             # Matbench: 每个 doc 是独立嵌套 JSON
             dataset = MatbenchDataset(

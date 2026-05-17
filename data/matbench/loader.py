@@ -25,7 +25,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       add_angles: bool = False,
                       add_bonds: bool = False,
                       max_bonds: int = 50,
-                      add_composition: bool = False) -> dict:
+                      add_composition: bool = False,
+                      no_sites: bool = False) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -40,6 +41,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         add_bonds:  是否添加全局 bonds 列表 (去重的原子对 + 距离)
         max_bonds:  最大 bond 数量 (超过则取最短的)
         add_composition: 是否添加元素比例数组 [{element, ratio}]
+        no_sites: 是否移除 sites 字段（绝对坐标），仅保留相对结构信息
 
     Returns:
         嵌套 JSON dict
@@ -90,8 +92,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             "beta": round(float(lattice.beta), 2),
             "gamma": round(float(lattice.gamma), 2),
         },
-        "sites": sites_data,
     }
+
+    if not no_sites:
+        doc["sites"] = sites_data
 
     # 全局 bonds 列表
     if add_bonds and len(structure) > 1:
@@ -277,11 +281,12 @@ class MatbenchLoader:
         add_bonds = opts.get("add_bonds", False)
         max_bonds = opts.get("max_bonds", 50)
         add_composition = opts.get("add_composition", False)
+        no_sites = opts.get("no_sites", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_sites, add_angles,
                                       add_bonds, max_bonds,
-                                      add_composition, seed)
+                                      add_composition, no_sites, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -306,6 +311,8 @@ class MatbenchLoader:
             extras.append(f"add_bonds (max={max_bonds})")
         if add_composition:
             extras.append("add_composition")
+        if no_sites:
+            extras.append("no_sites")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_sites={max_sites}{extras_msg})...")
@@ -324,8 +331,9 @@ class MatbenchLoader:
                 add_angles=add_angles,
                 add_bonds=add_bonds, max_bonds=max_bonds,
                 add_composition=add_composition,
+                no_sites=no_sites,
             )
-            if len(doc["sites"]) < orig_n:
+            if "sites" in doc and len(doc["sites"]) < orig_n:
                 n_truncated += 1
             docs.append(doc)
 
@@ -347,23 +355,27 @@ class MatbenchLoader:
         print(f"  📊 Split: {len(train_docs)} train / {len(test_docs)} test")
 
         # ── 统计 ──
-        n_sites = [len(d["sites"]) for d in docs]
-        print(f"  📏 Sites per structure: "
-              f"min={min(n_sites)}, max={max(n_sites)}, "
-              f"mean={np.mean(n_sites):.1f}, median={np.median(n_sites):.0f}")
+        if not no_sites:
+            n_sites = [len(d["sites"]) for d in docs]
+            print(f"  📏 Sites per structure: "
+                  f"min={min(n_sites)}, max={max(n_sites)}, "
+                  f"mean={np.mean(n_sites):.1f}, median={np.median(n_sites):.0f}")
+        else:
+            print(f"  📏 Sites removed (no_sites=True)")
 
         # ── 保存缓存 ──
         self._save_cache(cache_path)
 
     def _cache_path(self, task_name, max_sites, add_angles,
-                    add_bonds, max_bonds, add_composition, seed):
+                    add_bonds, max_bonds, add_composition, no_sites, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
         angles_tag = "_angles" if add_angles else ""
         bonds_tag = f"_bonds{max_bonds}" if add_bonds else ""
         comp_tag = "_comp" if add_composition else ""
-        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}{comp_tag}_seed{seed}.pkl"
+        nosites_tag = "_nosites" if no_sites else ""
+        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}{comp_tag}{nosites_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
