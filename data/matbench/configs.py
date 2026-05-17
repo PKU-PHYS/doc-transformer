@@ -81,9 +81,9 @@ _MATBENCH_OPTIONS = [
     ("--add-composition", {"action": "store_true", "default": False,
                            "help": "[Matbench] Add element ratio array [{element, ratio}]"},
      "add_composition"),
-    ("--no-sites",        {"action": "store_true", "default": False,
-                           "help": "[Matbench] Remove per-site absolute coords, keep only relative features"},
-     "no_sites"),
+    ("--no-coords",       {"action": "store_true", "default": False,
+                           "help": "[Matbench] Remove per-site absolute coords (x,y,z); keep sites if angles present"},
+     "no_coords"),
 ]
 
 # option_key → cache_tag 后缀
@@ -91,7 +91,7 @@ _OPTION_CACHE_TAGS = {
     "add_angles": "_angles",
     "add_bonds": "_bonds",
     "add_composition": "_comp",
-    "no_sites": "_nosites",
+    "no_coords": "_nocoords",
 }
 
 
