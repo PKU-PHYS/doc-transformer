@@ -81,6 +81,9 @@ _MATBENCH_OPTIONS = [
     ("--add-composition", {"action": "store_true", "default": False,
                            "help": "[Matbench] Add element ratio array [{element, ratio}]"},
      "add_composition"),
+    ("--add-ewald",       {"action": "store_true", "default": False,
+                           "help": "[Matbench] Add per-site Ewald electrostatic energy (ewald_energy)"},
+     "add_ewald"),
     ("--no-coords",       {"action": "store_true", "default": False,
                            "help": "[Matbench] Remove per-site absolute coords (x,y,z); keep sites if angles present"},
      "no_coords"),
@@ -91,6 +94,7 @@ _OPTION_CACHE_TAGS = {
     "add_angles": "_angles",
     "add_bonds": "_bonds",
     "add_composition": "_comp",
+    "add_ewald": "_ewald",
     "no_coords": "_nocoords",
 }
 

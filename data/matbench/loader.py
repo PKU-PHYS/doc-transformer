@@ -26,7 +26,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       add_bonds: bool = False,
                       max_bonds: int = 50,
                       add_composition: bool = False,
-                      no_coords: bool = False) -> dict:
+                      no_coords: bool = False,
+                      add_ewald: bool = False) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -43,6 +44,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         add_composition: 是否添加元素比例数组 [{element, ratio}]
         no_coords: 移除 per-site 绝对坐标 (x,y,z)。若 site 还有其他字段 (如 angles) 则保留 sites；
                    若只剩 element 则整个 sites 删除
+        add_ewald: 是否添加 per-site Ewald 静电能 (ewald_energy)
 
     Returns:
         嵌套 JSON dict
@@ -58,6 +60,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     angle_info = None
     if add_angles and len(structure) > 1:
         angle_info = _compute_angle_info(structure)
+
+    ewald_energies = None
+    if add_ewald:
+        ewald_energies = _compute_ewald_site_energies(structure)
 
     sites_data = []
     for site_idx, site in enumerate(structure):
@@ -76,6 +82,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             site_dict["cn"] = info["cn"]
             site_dict["avg_angle"] = info["avg_angle"]
             site_dict["min_angle"] = info["min_angle"]
+
+        # 添加 Ewald 静电能
+        if ewald_energies is not None and site_idx < len(ewald_energies):
+            site_dict["ewald_energy"] = ewald_energies[site_idx]
 
         sites_data.append(site_dict)
 
@@ -126,6 +136,43 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         doc["target"] = round(float(target_val), 6)
 
     return doc
+
+
+def _compute_ewald_site_energies(structure) -> Optional[List[float]]:
+    """
+    计算每个 site 的 Ewald 静电能（行和形式）。
+
+    使用 pymatgen 的 EwaldSummation，需要先猜测氧化态。
+    若氧化态赋值失败或 Ewald 计算异常，返回 None（跳过该结构）。
+
+    每个 site 的 ewald_energy = total_energy_matrix[i, :].sum()，
+    代表该原子在晶格周期性静电场中的总交互能。
+    值越负表示该位点静电稳定性越高（典型阴离子），
+    可区分离子性/共价性环境，对带隙和形成能预测有直接物理关联。
+
+    Args:
+        structure: pymatgen Structure
+
+    Returns:
+        List[float] 长度 = len(structure)，或 None（计算失败时）
+    """
+    if len(structure) < 1:
+        return None
+
+    try:
+        s_oxi = structure.copy()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            s_oxi.add_oxidation_state_by_guess()
+
+        from pymatgen.analysis.ewald import EwaldSummation
+        ewald = EwaldSummation(s_oxi)
+        site_energies = ewald.total_energy_matrix.sum(axis=1)
+
+        return [round(float(e), 4) for e in site_energies]
+    except Exception:
+        # 氧化态赋值失败或 Ewald 计算异常 → 跳过
+        return None
 
 
 def _compute_angle_info(structure, cutoff_factor: float = 1.3) -> Dict[int, dict]:
@@ -293,11 +340,13 @@ class MatbenchLoader:
         max_bonds = opts.get("max_bonds", 50)
         add_composition = opts.get("add_composition", False)
         no_coords = opts.get("no_coords", False)
+        add_ewald = opts.get("add_ewald", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_sites, add_angles,
                                       add_bonds, max_bonds,
-                                      add_composition, no_coords, seed)
+                                      add_composition, no_coords,
+                                      add_ewald, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -324,6 +373,8 @@ class MatbenchLoader:
             extras.append("add_composition")
         if no_coords:
             extras.append("no_coords")
+        if add_ewald:
+            extras.append("add_ewald")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_sites={max_sites}{extras_msg})...")
@@ -343,6 +394,7 @@ class MatbenchLoader:
                 add_bonds=add_bonds, max_bonds=max_bonds,
                 add_composition=add_composition,
                 no_coords=no_coords,
+                add_ewald=add_ewald,
             )
             if "sites" in doc and len(doc["sites"]) < orig_n:
                 n_truncated += 1
@@ -379,7 +431,8 @@ class MatbenchLoader:
         self._save_cache(cache_path)
 
     def _cache_path(self, task_name, max_sites, add_angles,
-                    add_bonds, max_bonds, add_composition, no_coords, seed):
+                    add_bonds, max_bonds, add_composition, no_coords,
+                    add_ewald, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
@@ -387,7 +440,8 @@ class MatbenchLoader:
         bonds_tag = f"_bonds{max_bonds}" if add_bonds else ""
         comp_tag = "_comp" if add_composition else ""
         nocoords_tag = "_nocoords" if no_coords else ""
-        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}_seed{seed}.pkl"
+        ewald_tag = "_ewald" if add_ewald else ""
+        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
