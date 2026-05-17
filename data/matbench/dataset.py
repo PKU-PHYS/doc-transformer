@@ -148,12 +148,11 @@ class MatbenchDataset(Dataset):
         size_mb = cache_path.stat().st_size / 1024 / 1024
         print(f"    💾 Cached: {cache_path.name} ({size_mb:.1f} MB)")
 
-    @staticmethod
-    def _cache_path(cache_tag: str):
+    def _cache_path(self, cache_tag: str):
         if not cache_tag:
             return None
         cache_dir = pathlib.Path(__file__).parent / "cache"
-        return cache_dir / f"{cache_tag}_parsed.pkl"
+        return cache_dir / f"{cache_tag}_t{self.max_tokens}_parsed.pkl"
 
     def __len__(self):
         return len(self._all_leaves)
