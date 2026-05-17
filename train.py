@@ -233,6 +233,7 @@ def train_stage(
     patience: int,
     train_config: TrainConfig,
     model_config: ModelConfig,
+    checkpoint_dir: str = "checkpoints",
     writer=None,
     global_step: int = 0,
     checkpoint_interval: int = 5,
@@ -440,7 +441,7 @@ def train_stage(
         # ── 定期保存 checkpoint（含完整训练状态）──
         if (epoch + 1) % checkpoint_interval == 0:
             save_checkpoint(model, f"{stage_name}_e{epoch+1}",
-                            train_config.checkpoint_dir,
+                            checkpoint_dir,
                             optimizer=optimizer, scheduler=scheduler,
                             scaler=scaler, epoch=epoch+1,
                             best_loss=best_loss, stage_name=stage_name,
@@ -609,12 +610,16 @@ def main():
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
-    print(f"Checkpoint dir: {train_config.checkpoint_dir}")
 
-    # ── TensorBoard ──
+    # ── 构建 checkpoint 子目录：checkpoints/{dataset}_{timestamp}/ ──
     run_name = time.strftime("%Y%m%d_%H%M%S")
     if args.resume:
         run_name += "_resumed"
+    checkpoint_dir = os.path.join(train_config.checkpoint_dir, f"{args.dataset}_{run_name}")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    print(f"Checkpoint dir: {checkpoint_dir}")
+
+    # ── TensorBoard ──
     writer = SummaryWriter(log_dir=os.path.join("runs", run_name))
     print(f"  📊 TensorBoard: runs/{run_name}")
     print(f"     Launch: tensorboard --logdir runs/")
@@ -677,22 +682,23 @@ def main():
             patience=stage_cfg.patience,
             train_config=train_config,
             model_config=model_config,
+            checkpoint_dir=checkpoint_dir,
             writer=writer,
             global_step=global_step,
             resume_ckpt=resume_ckpt if stage_idx == 0 else None,
             test_dataset=test_ds,
             eval_metric=eval_metric,
         )
-        save_checkpoint(model, f"{stage_cfg.name}_final", train_config.checkpoint_dir, log)
+        save_checkpoint(model, f"{stage_cfg.name}_final", checkpoint_dir, log)
         all_logs[stage_cfg.name] = log
 
     # ── 保存日志 ──
-    log_path = os.path.join(train_config.checkpoint_dir, "training_log.json")
+    log_path = os.path.join(checkpoint_dir, "training_log.json")
     with open(log_path, "w") as f:
         json.dump(all_logs, f, indent=2)
     print(f"\n  📁 Log: {log_path}")
 
-    plot_loss_curves(all_logs, train_config.checkpoint_dir)
+    plot_loss_curves(all_logs, checkpoint_dir)
 
     print(f"\n{'='*70}")
     print(f"  Training Complete!")
