@@ -504,14 +504,9 @@ def main():
                         help="Dataset name (california_housing, matbench_dielectric, etc.)")
     parser.add_argument("--csv", type=str, default=None,
                         help="Path to custom CSV file (overrides --dataset)")
-    parser.add_argument("--add-angles", action="store_true", default=False,
-                        help="[Matbench] Add per-site coordination stats (cn, avg_angle, min_angle)")
-    parser.add_argument("--add-bonds", action="store_true", default=False,
-                        help="[Matbench] Add global bonds list (unique atom pairs + distances)")
-    parser.add_argument("--add-composition", action="store_true", default=False,
-                        help="[Matbench] Add element ratio array [{element, ratio}]")
-    parser.add_argument("--no-sites", action="store_true", default=False,
-                        help="[Matbench] Remove per-site absolute coords, keep only relative features")
+    # Matbench 特有选项（由 data.matbench.configs 模块管理）
+    from data.matbench.configs import register_args as register_matbench_args
+    register_matbench_args(parser)
     parser.add_argument("--warm-restart", action="store_true", default=False,
                         help="With --resume: only load model weights, discard optimizer/scheduler/RNG")
     args = parser.parse_args()
@@ -528,21 +523,13 @@ def main():
         # Matbench 路径
         # ═══════════════════════════════════════════
         from data.matbench import MatbenchLoader, MatbenchDataset
-        from data.matbench.configs import get_matbench_config
+        from data.matbench.configs import get_matbench_config, build_dataset_options, build_cache_tag
 
         mb_config = get_matbench_config(args.dataset)
         eval_metric = mb_config.metric  # "mae"
 
-        # 合并 CLI 选项到 dataset_options
-        dataset_options = dict(mb_config.dataset_options)  # 复制配方默认值
-        if args.add_angles:
-            dataset_options["add_angles"] = True
-        if args.add_bonds:
-            dataset_options["add_bonds"] = True
-        if args.add_composition:
-            dataset_options["add_composition"] = True
-        if args.no_sites:
-            dataset_options["no_sites"] = True
+        # 合并 CLI 选项到 dataset_options（逻辑由 configs 模块管理）
+        dataset_options = build_dataset_options(args, mb_config)
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
@@ -635,16 +622,8 @@ def main():
     global_step = 0
     for stage_idx, stage_cfg in enumerate(stages):
         if is_matbench:
-            # 构建含选项的 cache_tag，避免不同选项共用缓存
-            opts_tag = ""
-            if dataset_options.get("add_angles"):
-                opts_tag += "_angles"
-            if dataset_options.get("add_bonds"):
-                opts_tag += "_bonds"
-            if dataset_options.get("add_composition"):
-                opts_tag += "_comp"
-            if dataset_options.get("no_sites"):
-                opts_tag += "_nosites"
+            # 构建含选项的 cache_tag（逻辑由 configs 模块管理）
+            opts_tag = build_cache_tag(dataset_options)
 
             # Matbench: 每个 doc 是独立嵌套 JSON
             dataset = MatbenchDataset(

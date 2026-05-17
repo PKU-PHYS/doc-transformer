@@ -63,3 +63,59 @@ def get_matbench_config(task_name: str) -> MatbenchTaskConfig:
         return MATBENCH_CONFIGS[task_name]
     # 未知任务 → 默认配置
     return MatbenchTaskConfig(description=f"Unknown task: {task_name}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# CLI 接口 — train.py 通过这三个函数与 Matbench 选项交互
+# ═══════════════════════════════════════════════════════════════
+
+# Matbench 支持的所有 dataset_options 及其 CLI 映射
+# (cli_flag, cli_kwargs, option_key)
+_MATBENCH_OPTIONS = [
+    ("--add-angles",      {"action": "store_true", "default": False,
+                           "help": "[Matbench] Add per-site coordination stats (cn, avg_angle, min_angle)"},
+     "add_angles"),
+    ("--add-bonds",       {"action": "store_true", "default": False,
+                           "help": "[Matbench] Add global bonds list (unique atom pairs + distances)"},
+     "add_bonds"),
+    ("--add-composition", {"action": "store_true", "default": False,
+                           "help": "[Matbench] Add element ratio array [{element, ratio}]"},
+     "add_composition"),
+    ("--no-sites",        {"action": "store_true", "default": False,
+                           "help": "[Matbench] Remove per-site absolute coords, keep only relative features"},
+     "no_sites"),
+]
+
+# option_key → cache_tag 后缀
+_OPTION_CACHE_TAGS = {
+    "add_angles": "_angles",
+    "add_bonds": "_bonds",
+    "add_composition": "_comp",
+    "no_sites": "_nosites",
+}
+
+
+def register_args(parser):
+    """在 argparse parser 上注册 Matbench 特有的 CLI 参数。"""
+    for flag, kwargs, _ in _MATBENCH_OPTIONS:
+        parser.add_argument(flag, **kwargs)
+
+
+def build_dataset_options(args, mb_config: MatbenchTaskConfig) -> dict:
+    """将 CLI 参数与配方默认值合并为 dataset_options dict。"""
+    opts = dict(mb_config.dataset_options)
+    for _, _, option_key in _MATBENCH_OPTIONS:
+        attr_name = option_key  # argparse 把 '-' 转为 '_'
+        if getattr(args, attr_name, False):
+            opts[option_key] = True
+    return opts
+
+
+def build_cache_tag(dataset_options: dict) -> str:
+    """从 dataset_options 构建缓存标签后缀（用于 MatbenchDataset）。"""
+    tag = ""
+    for option_key, suffix in _OPTION_CACHE_TAGS.items():
+        if dataset_options.get(option_key):
+            tag += suffix
+    return tag
+
