@@ -497,7 +497,8 @@ def save_checkpoint(model, name, checkpoint_dir, log=None,
         print(f"  📄 Log: {log_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Document Transformer")
+    parser = argparse.ArgumentParser(description="Train Document Transformer",
+                                     allow_abbrev=False)
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to checkpoint .pth to resume from")
     parser.add_argument("--dataset", type=str, default="california_housing",
