@@ -15,6 +15,7 @@ Matbench 数据集 — 嵌套 JSON 晶体结构的 mask-predict。
 """
 
 import os
+import warnings
 import pickle
 import pathlib
 import random
@@ -76,6 +77,11 @@ class MatbenchDataset(Dataset):
 
             # 截断
             if len(leaves) > max_tokens:
+                warnings.warn(
+                    f"Document {i} has {len(leaves)} tokens, exceeding "
+                    f"max_tokens={max_tokens}. Truncating to {max_tokens}.",
+                    stacklevel=2,
+                )
                 leaves = leaves[:max_tokens]
 
             # 找 target 叶子索引
@@ -91,7 +97,23 @@ class MatbenchDataset(Dataset):
             if (i + 1) % 10000 == 0:
                 print(f"      ... {i+1}/{len(docs)} parsed")
 
+        # ── 汇总报告 ──
+        n_truncated = sum(1 for leaves in self._all_leaves if len(leaves) >= max_tokens)
+        n_target_lost = sum(1 for t in self._target_indices if t < 0)
         print(f"    ✅ Pre-parsed {len(self._all_leaves)} documents")
+        if n_truncated > 0:
+            warnings.warn(
+                f"{n_truncated}/{len(self._all_leaves)} documents were truncated "
+                f"to max_tokens={max_tokens}.",
+                stacklevel=2,
+            )
+        if n_target_lost > 0:
+            warnings.warn(
+                f"{n_target_lost}/{len(self._all_leaves)} documents lost their "
+                f"target leaf after truncation! These samples will use fallback "
+                f"masking (random numeric field), which corrupts training.",
+                stacklevel=2,
+            )
 
         # ── 预计算 fork_bias ──
         self._precompute_fork_bias()
