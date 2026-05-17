@@ -24,7 +24,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       max_sites: int = 126,
                       add_angles: bool = False,
                       add_bonds: bool = False,
-                      max_bonds: int = 50) -> dict:
+                      max_bonds: int = 50,
+                      add_composition: bool = False) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -38,6 +39,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         add_angles: 是否添加 per-site 配位统计 (cn, avg_angle, min_angle)
         add_bonds:  是否添加全局 bonds 列表 (去重的原子对 + 距离)
         max_bonds:  最大 bond 数量 (超过则取最短的)
+        add_composition: 是否添加元素比例数组 [{element, ratio}]
 
     Returns:
         嵌套 JSON dict
@@ -94,6 +96,16 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     # 全局 bonds 列表
     if add_bonds and len(structure) > 1:
         doc["bonds"] = _compute_bonds(structure, max_bonds)
+
+    # 元素比例数组 — 用数组格式使元素名作为叶子值而非 path key
+    if add_composition:
+        from collections import Counter
+        elem_counts = Counter(str(site.specie) for site in structure)
+        total = sum(elem_counts.values())
+        doc["composition"] = [
+            {"element": elem, "ratio": round(count / total, 4)}
+            for elem, count in sorted(elem_counts.items())
+        ]
 
     if target_val is not None:
         doc["target"] = round(float(target_val), 6)
@@ -264,10 +276,12 @@ class MatbenchLoader:
         add_angles = opts.get("add_angles", False)
         add_bonds = opts.get("add_bonds", False)
         max_bonds = opts.get("max_bonds", 50)
+        add_composition = opts.get("add_composition", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_sites, add_angles,
-                                      add_bonds, max_bonds, seed)
+                                      add_bonds, max_bonds,
+                                      add_composition, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -290,6 +304,8 @@ class MatbenchLoader:
             extras.append("add_angles")
         if add_bonds:
             extras.append(f"add_bonds (max={max_bonds})")
+        if add_composition:
+            extras.append("add_composition")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_sites={max_sites}{extras_msg})...")
@@ -307,6 +323,7 @@ class MatbenchLoader:
                 structure, target_val=target, max_sites=max_sites,
                 add_angles=add_angles,
                 add_bonds=add_bonds, max_bonds=max_bonds,
+                add_composition=add_composition,
             )
             if len(doc["sites"]) < orig_n:
                 n_truncated += 1
@@ -339,13 +356,14 @@ class MatbenchLoader:
         self._save_cache(cache_path)
 
     def _cache_path(self, task_name, max_sites, add_angles,
-                    add_bonds, max_bonds, seed):
+                    add_bonds, max_bonds, add_composition, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
         angles_tag = "_angles" if add_angles else ""
         bonds_tag = f"_bonds{max_bonds}" if add_bonds else ""
-        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}_seed{seed}.pkl"
+        comp_tag = "_comp" if add_composition else ""
+        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}{comp_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
