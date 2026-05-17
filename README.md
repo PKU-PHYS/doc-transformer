@@ -1,43 +1,41 @@
-# Document Transformer Testing & Prototype
+# Document Transformer
 
-This directory contains the prototype implementation of the **Document Transformer**, a Masked Prediction model designed to natively handle deeply nested MongoDB JSON documents without manually engineered schemas or SQL masks.
+A **Masked Prediction Transformer** that natively handles deeply nested JSON documents (MongoDB-style) for structured property prediction.
 
 ## Requirements
 
-Ensure `pytorch` and `sentence-transformers` are installed in your environment:
 ```bash
 pixi install
 ```
 
-## Running the Validation Pipeline
+## Training
 
-The model must pass a strict 3-stage sanity check to prove gradient flow and architectural soundness. 
-Run these commands from the project root:
+### Matbench (Crystal Property Prediction)
 
-1. **Stage 1: Zero-Loss Overfit**
-   ```bash
-   pixi run python tests/test_stage1_overfit.py
-   ```
-2. **Stage 2: Logic Copy & Addressing**
-   ```bash
-   pixi run python tests/test_stage2_copy.py
-   ```
-3. **Stage 3: Padding Masking Block**
-   ```bash
-   pixi run python tests/test_stage3_padding.py
-   ```
-
-## Training on Synthetic Data
-
-To launch an end-to-end training loop over synthetic hierarchical data:
 ```bash
-pixi run python train.py
+pixi run python train.py --dataset matbench_mp_gap
+pixi run python train.py --dataset matbench_dielectric --add-angles --no-coords
 ```
-Checkpoints will be saved to `checkpoints/`.
 
-## Inference Demo
+Available options: `--add-angles`, `--add-bonds`, `--add-composition`, `--no-coords`, `--add-ewald`.
 
-To test the trained checkpoint on a single manual dictionary logic completion:
+### Tabular Regression
+
+```bash
+pixi run python train.py --dataset california_housing
+```
+
+### Resume Training
+
+```bash
+pixi run python train.py --dataset matbench_mp_gap --resume checkpoints/xxx.pth
+pixi run python train.py --dataset matbench_mp_gap --resume checkpoints/xxx.pth --warm-restart
+```
+
+Checkpoints are saved to `checkpoints/`. TensorBoard logs to `runs/`.
+
+## Inference
+
 ```bash
 pixi run python inference.py
 ```

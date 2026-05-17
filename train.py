@@ -79,11 +79,11 @@ def plot_loss_curves(all_logs: dict, save_dir: str):
     if len(all_logs) == 1:
         axes = [axes]
 
-    colors = {"stage0": "#9C27B0", "stage1": "#4CAF50", "stage2": "#2196F3", "stage3": "#FF9800"}
+    _PALETTE = ["#9C27B0", "#4CAF50", "#2196F3", "#FF9800", "#E91E63", "#00BCD4"]
 
-    for ax, (stage_key, log) in zip(axes, all_logs.items()):
+    for idx, (ax, (stage_key, log)) in enumerate(zip(axes, all_logs.items())):
         losses = log["losses"]
-        color = colors.get(stage_key, "#666")
+        color = _PALETTE[idx % len(_PALETTE)]
         ax.plot(range(1, len(losses) + 1), losses, color=color, linewidth=1.5)
         ax.set_title(f'{log["stage"]}', fontsize=12, fontweight="bold")
         ax.set_xlabel("Epoch")
@@ -111,9 +111,9 @@ def plot_loss_curves(all_logs: dict, save_dir: str):
     global_epoch = 0
     stage_boundaries = []
 
-    for stage_key, log in all_logs.items():
+    for idx, (stage_key, log) in enumerate(all_logs.items()):
         losses = log["losses"]
-        color = colors.get(stage_key, "#666")
+        color = _PALETTE[idx % len(_PALETTE)]
         epochs = list(range(global_epoch + 1, global_epoch + len(losses) + 1))
         ax.plot(epochs, losses, color=color, linewidth=1.5, label=log["stage"])
         stage_boundaries.append(global_epoch)

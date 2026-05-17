@@ -18,7 +18,6 @@ import os
 import warnings
 import pickle
 import pathlib
-import random
 import torch
 from typing import List, Dict, Any, Tuple
 from torch.utils.data import Dataset
@@ -177,17 +176,10 @@ class MatbenchDataset(Dataset):
                 path_ids=orig.path_ids, group_ids=orig.group_ids,
             )
         else:
-            # 兜底：随机 mask 一个数值字段
-            num_indices = [i for i, l in enumerate(leaves)
-                          if l.value_type == "number"]
-            if num_indices:
-                i = random.choice(num_indices)
-                orig = leaves[i]
-                target_masks[i] = (orig.value, orig.value_type)
-                leaves[i] = LeafNode(
-                    value="[MASK]", value_type="mask",
-                    path=orig.path, path_types=orig.path_types,
-                    path_ids=orig.path_ids, group_ids=orig.group_ids,
-                )
+            raise RuntimeError(
+                f"Sample {idx}: target leaf not found (target_idx={target_idx}). "
+                f"This usually means the target was truncated by max_tokens. "
+                f"Check structure_to_json token budget logic."
+            )
 
         return leaves, target_masks, fork_bias
