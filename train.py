@@ -503,8 +503,8 @@ def main():
                         help="Dataset name (california_housing, matbench_dielectric, etc.)")
     parser.add_argument("--csv", type=str, default=None,
                         help="Path to custom CSV file (overrides --dataset)")
-    parser.add_argument("--add-nn", action="store_true", default=False,
-                        help="[Matbench] Add nearest-neighbor distances to crystal JSON (per-site)")
+    parser.add_argument("--add-angles", action="store_true", default=False,
+                        help="[Matbench] Add per-site coordination stats (cn, avg_angle, min_angle)")
     parser.add_argument("--add-bonds", action="store_true", default=False,
                         help="[Matbench] Add global bonds list (unique atom pairs + distances)")
     parser.add_argument("--warm-restart", action="store_true", default=False,
@@ -530,8 +530,8 @@ def main():
 
         # 合并 CLI 选项到 dataset_options
         dataset_options = dict(mb_config.dataset_options)  # 复制配方默认值
-        if args.add_nn:
-            dataset_options["add_nn_distances"] = True
+        if args.add_angles:
+            dataset_options["add_angles"] = True
         if args.add_bonds:
             dataset_options["add_bonds"] = True
 
@@ -624,8 +624,8 @@ def main():
         if is_matbench:
             # 构建含选项的 cache_tag，避免不同选项共用缓存
             opts_tag = ""
-            if dataset_options.get("add_nn_distances"):
-                opts_tag += "_nn"
+            if dataset_options.get("add_angles"):
+                opts_tag += "_angles"
             if dataset_options.get("add_bonds"):
                 opts_tag += "_bonds"
 

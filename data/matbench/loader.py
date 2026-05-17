@@ -10,6 +10,7 @@ Matbench 数据加载器 — 将 pymatgen Structure 转为嵌套 JSON。
 
 import math
 import random
+import warnings
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Optional, Tuple
@@ -21,8 +22,7 @@ from typing import List, Dict, Optional, Tuple
 
 def structure_to_json(structure, target_val: Optional[float] = None,
                       max_sites: int = 126,
-                      add_nn_distances: bool = False,
-                      n_neighbors: int = 2,
+                      add_angles: bool = False,
                       add_bonds: bool = False,
                       max_bonds: int = 50) -> dict:
     """
@@ -35,8 +35,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         structure:  pymatgen Structure 对象
         target_val: 预测目标值 (训练时提供，测试时为 None)
         max_sites:  最大 site 数量
-        add_nn_distances: 是否添加最近邻距离和元素信息 (per-site)
-        n_neighbors: 添加几个最近邻 (默认 2)
+        add_angles: 是否添加 per-site 配位统计 (cn, avg_angle, min_angle)
         add_bonds:  是否添加全局 bonds 列表 (去重的原子对 + 距离)
         max_bonds:  最大 bond 数量 (超过则取最短的)
 
@@ -51,10 +50,9 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             pass  # 部分结构无法缩，保持原样
 
     # ── Step 2: 构建 sites 数据 ──
-    # 如果需要近邻距离，提前计算全部距离矩阵
-    nn_info = None
-    if add_nn_distances and len(structure) > 1:
-        nn_info = _compute_nn_info(structure, n_neighbors)
+    angle_info = None
+    if add_angles and len(structure) > 1:
+        angle_info = _compute_angle_info(structure)
 
     sites_data = []
     for site_idx, site in enumerate(structure):
@@ -67,11 +65,12 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             "z": round(float(frac[2]), 6),
         }
 
-        # 添加最近邻信息
-        if nn_info is not None and site_idx in nn_info:
-            for k, (nn_elem, nn_dist) in enumerate(nn_info[site_idx]):
-                site_dict[f"nn{k+1}_dist"] = round(float(nn_dist), 4)
-                site_dict[f"nn{k+1}_elem"] = nn_elem
+        # 添加配位统计
+        if angle_info is not None and site_idx in angle_info:
+            info = angle_info[site_idx]
+            site_dict["cn"] = info["cn"]
+            site_dict["avg_angle"] = info["avg_angle"]
+            site_dict["min_angle"] = info["min_angle"]
 
         sites_data.append(site_dict)
 
@@ -102,33 +101,76 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     return doc
 
 
-def _compute_nn_info(structure, n_neighbors: int) -> Dict[int, List[Tuple[str, float]]]:
+def _compute_angle_info(structure, cutoff_factor: float = 1.3) -> Dict[int, dict]:
     """
-    计算每个 site 的 k 个最近邻距离和元素。
+    计算每个 site 的配位统计：配位数、平均键角、最小键角。
+
+    使用自适应 cutoff：最近邻距离 × cutoff_factor 定义配位壳层。
+    配位数 + 平均角 + 最小角 足以区分常见配位几何：
+      - cn=4, avg≈109° → 四面体
+      - cn=6, avg≈90°  → 八面体
+      - min_angle 远低于 avg → 严重畸变
+
+    Args:
+        structure:      pymatgen Structure
+        cutoff_factor:  配位壳层 = 最近邻距离 × 此因子 (默认 1.5)
 
     Returns:
-        {site_idx: [(elem, dist), ...]}
+        {site_idx: {"cn": int, "avg_angle": float, "min_angle": float}}
     """
-    result = {}
     n_sites = len(structure)
-    k = min(n_neighbors, n_sites - 1)
-    if k <= 0:
-        return result
+    if n_sites <= 1:
+        return {}
 
-    # 用 structure.get_all_neighbors 批量计算
-    # cutoff 设为 10 Å，覆盖绝大多数晶体的近邻
-    all_neighbors = structure.get_all_neighbors(r=10.0)
+    result = {}
+
+    # 批量获取 5 Å 内的所有邻居
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # 静默 pymatgen 的结构警告
+        all_neighbors = structure.get_all_neighbors(r=5.0)
 
     for site_idx in range(n_sites):
         neighbors = all_neighbors[site_idx]
         if not neighbors:
             continue
-        # 按距离排序，取前 k 个
-        neighbors_sorted = sorted(neighbors, key=lambda x: x.nn_distance)[:k]
-        result[site_idx] = [
-            (str(nn.specie), nn.nn_distance)
-            for nn in neighbors_sorted
-        ]
+
+        # 按距离排序
+        neighbors_sorted = sorted(neighbors, key=lambda x: x.nn_distance)
+
+        # 自适应 cutoff：最近邻距离 × factor
+        min_dist = neighbors_sorted[0].nn_distance
+        cutoff = min_dist * cutoff_factor
+        coord_neighbors = [n for n in neighbors_sorted if n.nn_distance <= cutoff]
+        cn = len(coord_neighbors)
+
+        if cn < 2:
+            # 配位数 < 2 无法计算角度
+            result[site_idx] = {"cn": cn, "avg_angle": 0.0, "min_angle": 0.0}
+            continue
+
+        # 计算所有配位近邻对之间的键角
+        center_coords = structure[site_idx].coords
+        angles = []
+        for i in range(len(coord_neighbors)):
+            for j in range(i + 1, len(coord_neighbors)):
+                vec_i = coord_neighbors[i].coords - center_coords
+                vec_j = coord_neighbors[j].coords - center_coords
+                norm_i = np.linalg.norm(vec_i)
+                norm_j = np.linalg.norm(vec_j)
+                if norm_i < 1e-10 or norm_j < 1e-10:
+                    continue
+                cos_angle = np.dot(vec_i, vec_j) / (norm_i * norm_j)
+                cos_angle = np.clip(cos_angle, -1.0, 1.0)
+                angles.append(np.degrees(np.arccos(cos_angle)))
+
+        if angles:
+            result[site_idx] = {
+                "cn": cn,
+                "avg_angle": round(float(np.mean(angles)), 1),
+                "min_angle": round(float(np.min(angles)), 1),
+            }
+        else:
+            result[site_idx] = {"cn": cn, "avg_angle": 0.0, "min_angle": 0.0}
 
     return result
 
@@ -219,13 +261,12 @@ class MatbenchLoader:
 
         # 解析 dataset_options
         opts = dataset_options or {}
-        add_nn = opts.get("add_nn_distances", False)
-        n_nn = opts.get("n_neighbors", 2)
+        add_angles = opts.get("add_angles", False)
         add_bonds = opts.get("add_bonds", False)
         max_bonds = opts.get("max_bonds", 50)
 
         # ── 尝试加载缓存 ──
-        cache_path = self._cache_path(task_name, max_sites, add_nn, n_nn,
+        cache_path = self._cache_path(task_name, max_sites, add_angles,
                                       add_bonds, max_bonds, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
@@ -245,10 +286,10 @@ class MatbenchLoader:
 
         # ── Structure → JSON ──
         extras = []
-        if add_nn:
-            extras.append(f"add_nn_distances={add_nn}")
+        if add_angles:
+            extras.append("add_angles")
         if add_bonds:
-            extras.append(f"add_bonds={add_bonds}, max_bonds={max_bonds}")
+            extras.append(f"add_bonds (max={max_bonds})")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_sites={max_sites}{extras_msg})...")
@@ -264,7 +305,7 @@ class MatbenchLoader:
             orig_n = len(structure)
             doc = structure_to_json(
                 structure, target_val=target, max_sites=max_sites,
-                add_nn_distances=add_nn, n_neighbors=n_nn,
+                add_angles=add_angles,
                 add_bonds=add_bonds, max_bonds=max_bonds,
             )
             if len(doc["sites"]) < orig_n:
@@ -297,14 +338,14 @@ class MatbenchLoader:
         # ── 保存缓存 ──
         self._save_cache(cache_path)
 
-    def _cache_path(self, task_name, max_sites, add_nn, n_nn,
+    def _cache_path(self, task_name, max_sites, add_angles,
                     add_bonds, max_bonds, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
-        nn_tag = f"_nn{n_nn}" if add_nn else ""
+        angles_tag = "_angles" if add_angles else ""
         bonds_tag = f"_bonds{max_bonds}" if add_bonds else ""
-        return cache_dir / f"{task_name}_s{max_sites}{nn_tag}{bonds_tag}_seed{seed}.pkl"
+        return cache_dir / f"{task_name}_s{max_sites}{angles_tag}{bonds_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""

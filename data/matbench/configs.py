@@ -26,7 +26,7 @@ class MatbenchTaskConfig:
     metric: str = "mae"   # Matbench 标准评估指标
 
     # 数据集特有选项 — 传递给 MatbenchLoader/MatbenchDataset
-    # 例如: {"add_nn_distances": True, "n_neighbors": 2}
+    # 例如: {"add_angles": True, "add_bonds": True}
     dataset_options: Dict[str, Any] = field(default_factory=dict)
 
 
