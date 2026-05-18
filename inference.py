@@ -13,7 +13,7 @@ import argparse
 from typing import Optional, List
 import torch
 
-from config import ModelConfig
+from config import ModelConfig, MODEL_PRESETS, get_configs
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from model.json_parser import LeafNode, JSONParser
@@ -88,10 +88,13 @@ def main():
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to checkpoint .pth file. "
                              "If not specified, auto-finds the latest in checkpoints/")
+    parser.add_argument("--model-size", type=str, default="large",
+                        choices=list(MODEL_PRESETS.keys()),
+                        help=f"Model size preset ({', '.join(MODEL_PRESETS.keys())})")
     args = parser.parse_args()
 
     print("=== Document Transformer Inference ===\n")
-    model_config = ModelConfig()
+    model_config, _ = get_configs(args.model_size)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     frozen_lm = FrozenLM(model_config.frozen_lm_name, device=str(device))

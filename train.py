@@ -26,7 +26,7 @@ from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from config import ModelConfig, TrainConfig
+from config import ModelConfig, TrainConfig, MODEL_PRESETS, get_configs
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from data.base import collate_fn
@@ -419,14 +419,25 @@ def train_stage(
                          sample_idx=0, stage_name=stage_name,
                          epoch=epoch+1, batch_idx=batch_idx)
 
+        # ── Train 评估 ──
+        train_score = evaluate(model, loader, device, metric=eval_metric)
+        train_metric_name = f"train_{eval_metric}"
+        stage_log.setdefault(train_metric_name, []).append(train_score)
+        if writer is not None:
+            writer.add_scalar(f"{stage_name}/{train_metric_name}", train_score, epoch + 1)
+
         # ── Test 评估 ──
         if test_loader is not None:
             test_score = evaluate(model, test_loader, device, metric=eval_metric)
-            metric_name = f"test_{eval_metric}"
-            stage_log.setdefault(metric_name, []).append(test_score)
-            print(f"  🎯 Test {eval_metric.upper()}: {test_score:.4f}")
+            test_metric_name = f"test_{eval_metric}"
+            stage_log.setdefault(test_metric_name, []).append(test_score)
             if writer is not None:
-                writer.add_scalar(f"{stage_name}/{metric_name}", test_score, epoch + 1)
+                writer.add_scalar(f"{stage_name}/{test_metric_name}", test_score, epoch + 1)
+            print(f"  🎯 Train {eval_metric.upper()}: {train_score:.4f}  |  "
+                  f"Test {eval_metric.upper()}: {test_score:.4f}  |  "
+                  f"Gap: {test_score - train_score:.4f}")
+        else:
+            print(f"  🎯 Train {eval_metric.upper()}: {train_score:.4f}")
 
         # ── TensorBoard: per-epoch metrics ──
         if writer is not None:
@@ -505,6 +516,9 @@ def main():
                         help="Dataset name (california_housing, matbench_dielectric, etc.)")
     parser.add_argument("--csv", type=str, default=None,
                         help="Path to custom CSV file (overrides --dataset)")
+    parser.add_argument("--model-size", type=str, default="large",
+                        choices=list(MODEL_PRESETS.keys()),
+                        help=f"Model size preset ({', '.join(MODEL_PRESETS.keys())})")
     # Matbench 特有选项（由 data.matbench.configs 模块管理）
     from data.matbench.configs import register_args as register_matbench_args
     register_matbench_args(parser)
@@ -514,8 +528,8 @@ def main():
 
     set_seed(SEED)
 
-    model_config = ModelConfig()
-    train_config = TrainConfig()
+    model_config, train_config = get_configs(args.model_size)
+    print(f"  📐 Model preset: {args.model_size}")
 
     is_matbench = args.dataset.startswith("matbench_")
 
@@ -600,13 +614,13 @@ def main():
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total trainable params: {total_params:,} ({total_params/1e6:.1f}M)")
 
-    # ── 构建 run_name：{dataset}{opts_tag}_{timestamp} ──
+    # ── 构建 run_name：{timestamp}_{dataset}{opts_tag} ──
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     opts_tag = ""
     if is_matbench:
         from data.matbench.configs import build_cache_tag
         opts_tag = build_cache_tag(dataset_options)
-    run_name = f"{args.dataset}{opts_tag}_{timestamp}"
+    run_name = f"{timestamp}_{args.dataset}{opts_tag}"
     if args.resume:
         run_name += "_resumed"
     checkpoint_dir = os.path.join(train_config.checkpoint_dir, run_name)
