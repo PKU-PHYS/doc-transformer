@@ -84,6 +84,9 @@ _MATBENCH_OPTIONS = [
     ("--add-ewald",       {"action": "store_true", "default": False,
                            "help": "[Matbench] Add per-site Ewald electrostatic energy (ewald_energy)"},
      "add_ewald"),
+    ("--add-element-props", {"action": "store_true", "default": False,
+                             "help": "[Matbench] Add per-element physical properties (en, ie, ea)"},
+     "add_element_props"),
     ("--no-coords",       {"action": "store_true", "default": False,
                            "help": "[Matbench] Remove per-site absolute coords (x,y,z); keep sites if angles present"},
      "no_coords"),
@@ -95,6 +98,7 @@ _OPTION_CACHE_TAGS = {
     "add_bonds": "_bonds",
     "add_composition": "_comp",
     "add_ewald": "_ewald",
+    "add_element_props": "_elprops",
     "no_coords": "_nocoords",
 }
 
