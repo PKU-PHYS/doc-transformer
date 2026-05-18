@@ -556,7 +556,8 @@ def main():
 
         mb_loader = MatbenchLoader(args.dataset,
                                    max_tokens=model_config.max_tokens,
-                                   dataset_options=dataset_options)
+                                   dataset_options=dataset_options,
+                                   max_cpu_workers=train_config.max_cpu_workers)
         stages = mb_config.stages
 
     else:

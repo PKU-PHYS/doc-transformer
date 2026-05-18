@@ -167,20 +167,23 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     return doc
 
 
-def _compute_ewald_site_energies(structure) -> Optional[List[float]]:
+def _compute_ewald_site_energies(structure,
+                                  _bva_max_sites: int = 50,
+                                  _guess_max_reduced: int = 30,
+                                  ) -> Optional[List[float]]:
     """
-    计算每个 site 的 Ewald 静电能（行和形式）。
+    计算每个 site 的 Ewald 静电能（行和形式），三层策略保证不卡死。
 
-    使用 pymatgen 的 EwaldSummation，需要先猜测氧化态。
-    若氧化态赋值失败或 Ewald 计算异常，返回 None（跳过该结构）。
-
-    每个 site 的 ewald_energy = total_energy_matrix[i, :].sum()，
-    代表该原子在晶格周期性静电场中的总交互能。
-    值越负表示该位点静电稳定性越高（典型阴离子），
-    可区分离子性/共价性环境，对带隙和形成能预测有直接物理关联。
+    策略：
+      1. sites ≤ _bva_max_sites  → BVAnalyzer（键价分析，物理最准）
+      2. reduced_atoms ≤ _guess_max_reduced → oxi_state_guesses(max_sites=-1)
+         （组成穷举，保证电荷中性，先 reduce 到最简再搜索）
+      3. 都失败或结构太大 → 返回 None（跳过 Ewald 特征）
 
     Args:
         structure: pymatgen Structure
+        _bva_max_sites: BVAnalyzer 层的 site 数阈值（默认 50）
+        _guess_max_reduced: guess 层的 reduced 原子数阈值（默认 30）
 
     Returns:
         List[float] 长度 = len(structure)，或 None（计算失败时）
@@ -188,19 +191,53 @@ def _compute_ewald_site_energies(structure) -> Optional[List[float]]:
     if len(structure) < 1:
         return None
 
-    try:
-        s_oxi = structure.copy()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            s_oxi.add_oxidation_state_by_guess()
+    s_oxi = None
 
+    # ── 层 1: BVAnalyzer（小结构优先，物理最准）──
+    if len(structure) <= _bva_max_sites:
+        try:
+            import os, sys
+            from pymatgen.core.bond_valence import BVAnalyzer
+            s_oxi = structure.copy()
+            bva = BVAnalyzer()
+            # 屏蔽 spglib 的 C 层 stderr 警告
+            stderr_fd = sys.stderr.fileno()
+            old_stderr = os.dup(stderr_fd)
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, stderr_fd)
+            try:
+                valences = bva.get_valences(s_oxi)
+            finally:
+                os.dup2(old_stderr, stderr_fd)
+                os.close(old_stderr)
+                os.close(devnull)
+            s_oxi.add_oxidation_state_by_site(valences)
+        except Exception:
+            s_oxi = None
+
+    # ── 层 2: oxi_state_guesses（预检 reduced atoms 防卡死）──
+    if s_oxi is None:
+        reduced_n = int(structure.composition.reduced_composition.num_atoms)
+        if reduced_n <= _guess_max_reduced:
+            try:
+                s_oxi = structure.copy()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    s_oxi.add_oxidation_state_by_guess(max_sites=-1)
+            except Exception:
+                s_oxi = None
+
+    # ── 层 3: 都失败 → 跳过 ──
+    if s_oxi is None:
+        return None
+
+    # ── Ewald 求和 ──
+    try:
         from pymatgen.analysis.ewald import EwaldSummation
         ewald = EwaldSummation(s_oxi)
         site_energies = ewald.total_energy_matrix.sum(axis=1)
-
         return [round(float(e), 4) for e in site_energies]
     except Exception:
-        # 氧化态赋值失败或 Ewald 计算异常 → 跳过
         return None
 
 
@@ -357,10 +394,12 @@ class MatbenchLoader:
 
     def __init__(self, task_name: str, max_tokens: int = 256,
                  test_ratio: float = 0.2, seed: int = 42,
-                 dataset_options: dict = None):
+                 dataset_options: dict = None,
+                 max_cpu_workers: int = 32):
         self.task_name = task_name
         self.max_tokens = max_tokens
         self.target_key = "target"
+        self.max_cpu_workers = max_cpu_workers
 
         # 解析 dataset_options
         opts = dataset_options or {}
@@ -410,32 +449,51 @@ class MatbenchLoader:
         structure_col = self._find_structure_col(df)
         target_col = self._find_target_col(df, structure_col)
 
-        docs = []
-        n_truncated = 0
-        for idx in range(len(df)):
-            structure = df.iloc[idx][structure_col]
-            target = df.iloc[idx][target_col]
+        # ── 并行转换 ──
+        from joblib import Parallel, delayed
+        from tqdm import tqdm
 
-            orig_n = len(structure)
-            doc = structure_to_json(
-                structure, target_val=target, max_tokens=max_tokens,
+        structures = [df.iloc[i][structure_col] for i in range(len(df))]
+        targets = [df.iloc[i][target_col] for i in range(len(df))]
+        orig_sizes = [len(s) for s in structures]
+
+        def _convert_one(s, t):
+            return structure_to_json(
+                s, target_val=t, max_tokens=max_tokens,
                 add_angles=add_angles,
                 add_bonds=add_bonds, max_bonds=max_bonds,
                 add_composition=add_composition,
                 no_coords=no_coords,
                 add_ewald=add_ewald,
             )
-            if "sites" in doc and len(doc["sites"]) < orig_n:
-                n_truncated += 1
-            docs.append(doc)
 
-            # 进度显示
-            if (idx + 1) % 5000 == 0:
-                print(f"    ... {idx+1}/{len(df)} converted")
+        import os
+        n_workers = min(self.max_cpu_workers, os.cpu_count() or 1)
+        docs = Parallel(n_jobs=n_workers, backend="loky")(
+            delayed(_convert_one)(s, t)
+            for s, t in tqdm(zip(structures, targets),
+                             total=len(structures),
+                             desc="  🔄 Converting")
+        )
 
+        n_truncated = sum(
+            1 for doc, orig_n in zip(docs, orig_sizes)
+            if "sites" in doc and len(doc["sites"]) < orig_n
+        )
         if n_truncated > 0:
             print(f"  ⚠️  {n_truncated}/{len(docs)} structures truncated "
                   f"(dynamic max_sites, token budget={max_tokens})")
+
+        # Ewald 覆盖率统计
+        if add_ewald:
+            n_ewald = sum(
+                1 for doc in docs
+                if "sites" in doc and any(
+                    "ewald_energy" in s for s in doc["sites"]
+                )
+            )
+            print(f"  ⚡ Ewald coverage: {n_ewald}/{len(docs)} "
+                  f"({100*n_ewald/len(docs):.1f}%)")
 
         # ── Train/Test split ──
         from sklearn.model_selection import train_test_split
@@ -447,13 +505,12 @@ class MatbenchLoader:
         print(f"  📊 Split: {len(train_docs)} train / {len(test_docs)} test")
 
         # ── 统计 ──
-        if "sites" in doc:
-            n_sites = [len(d["sites"]) for d in docs if "sites" in d]
-            if n_sites:
-                print(f"  📏 Sites per structure: "
-                      f"min={min(n_sites)}, max={max(n_sites)}, "
-                      f"mean={np.mean(n_sites):.1f}, median={np.median(n_sites):.0f}")
-        if no_coords and "sites" not in doc:
+        n_sites = [len(d["sites"]) for d in docs if "sites" in d]
+        if n_sites:
+            print(f"  📏 Sites per structure: "
+                  f"min={min(n_sites)}, max={max(n_sites)}, "
+                  f"mean={np.mean(n_sites):.1f}, median={np.median(n_sites):.0f}")
+        elif no_coords:
             print(f"  📏 Sites removed (no per-site extras)")
 
         # ── 保存缓存 ──

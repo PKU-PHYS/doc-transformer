@@ -34,6 +34,7 @@ class TrainConfig:
     betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
     device: str = "cuda"
     num_workers: int = 0        # DataLoader 进程数 (0=主进程，避免 fork COW 开销)
+    max_cpu_workers: int = 32   # 全局 CPU 密集型任务（如数据预处理）的最大进程数
     
     checkpoint_dir: str = "checkpoints"
 
