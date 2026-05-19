@@ -87,6 +87,9 @@ _MATBENCH_OPTIONS = [
     ("--add-element-props", {"action": "store_true", "default": False,
                              "help": "[Matbench] Add per-element physical properties (en, ie, ea)"},
      "add_element_props"),
+    ("--add-comp-ewald",   {"action": "store_true", "default": False,
+                            "help": "[Matbench] Add per-element averaged Ewald energy to composition"},
+     "add_comp_ewald"),
     ("--no-coords",       {"action": "store_true", "default": False,
                            "help": "[Matbench] Remove per-site absolute coords (x,y,z); keep sites if angles present"},
      "no_coords"),
@@ -99,6 +102,7 @@ _OPTION_CACHE_TAGS = {
     "add_composition": "_comp",
     "add_ewald": "_ewald",
     "add_element_props": "_elprops",
+    "add_comp_ewald": "_cewald",
     "no_coords": "_nocoords",
 }
 
