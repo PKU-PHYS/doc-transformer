@@ -114,7 +114,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         angle_info = _compute_angle_info(structure)
 
     ewald_energies = None
-    if add_ewald:
+    if add_ewald or add_comp_ewald:
         ewald_energies = _compute_ewald_site_energies(structure)
 
     sites_data = []
@@ -135,8 +135,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             site_dict["avg_angle"] = info["avg_angle"]
             site_dict["min_angle"] = info["min_angle"]
 
-        # 添加 Ewald 静电能
-        if ewald_energies is not None and site_idx < len(ewald_energies):
+        # 添加 Ewald 静电能（仅 add_ewald 时写入 per-site，comp_ewald 只需聚合）
+        if add_ewald and ewald_energies is not None and site_idx < len(ewald_energies):
             site_dict["ewald_energy"] = ewald_energies[site_idx]
 
         sites_data.append(site_dict)
@@ -173,11 +173,14 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         doc["vol_per_atom"] = round(float(structure.volume / len(structure)), 4)
 
     # 全局最近邻距离统计（轨道重叠的直接代理量，与 band gap 相关 r=-0.46）
-    if add_nn_stats and len(structure) > 1:
-        import numpy as np
+    # 提前计算 nn_dists，供 add_nn_stats 和 add_comp_nn 共用
+    nn_dists = None
+    if (add_nn_stats or add_comp_nn) and len(structure) > 1:
         dm = structure.distance_matrix  # (N, N) 考虑周期性
         np.fill_diagonal(dm, np.inf)
         nn_dists = dm.min(axis=1)  # 每个 site 的最近邻距离
+
+    if add_nn_stats and nn_dists is not None:
         doc["nn_min"] = round(float(nn_dists.min()), 4)
         doc["nn_mean"] = round(float(nn_dists.mean()), 4)
 
@@ -208,32 +211,25 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         elem_counts = Counter(str(site.specie) for site in structure)
         total = sum(elem_counts.values())
 
-        # per-element 平均 Ewald
+        # per-element 平均 Ewald（复用已计算的 ewald_energies）
         ewald_by_elem = {}
-        if add_comp_ewald:
-            all_ewald = _compute_ewald_site_energies(structure)
-            if all_ewald is not None:
-                sums = defaultdict(float)
-                counts = defaultdict(int)
-                for site_idx, site in enumerate(structure):
-                    sym = str(site.specie)
-                    sums[sym] += all_ewald[site_idx]
-                    counts[sym] += 1
-                ewald_by_elem = {
-                    sym: round(sums[sym] / counts[sym], 4)
-                    for sym in sums
-                }
+        if add_comp_ewald and ewald_energies is not None:
+            sums = defaultdict(float)
+            counts = defaultdict(int)
+            for site_idx, site in enumerate(structure):
+                sym = str(site.specie)
+                sums[sym] += ewald_energies[site_idx]
+                counts[sym] += 1
+            ewald_by_elem = {
+                sym: round(sums[sym] / counts[sym], 4)
+                for sym in sums
+            }
 
-        # per-element 平均最近邻距离
+        # per-element 平均最近邻距离（复用已计算的 nn_dists）
         nn_by_elem = {}
-        if add_comp_nn and len(structure) > 1:
-            import numpy as _np
-            dm = structure.distance_matrix
-            _np.fill_diagonal(dm, _np.inf)
-            nn_dists = dm.min(axis=1)  # 每个 site 的最近邻距离
-            from collections import defaultdict as _dd
-            nn_sums = _dd(float)
-            nn_counts = _dd(int)
+        if add_comp_nn and nn_dists is not None:
+            nn_sums = defaultdict(float)
+            nn_counts = defaultdict(int)
             for site_idx, site in enumerate(structure):
                 sym = str(site.specie)
                 nn_sums[sym] += nn_dists[site_idx]
@@ -356,7 +352,7 @@ def _compute_angle_info(structure, cutoff_factor: float = 1.3) -> Dict[int, dict
 
     Args:
         structure:      pymatgen Structure
-        cutoff_factor:  配位壳层 = 最近邻距离 × 此因子 (默认 1.5)
+        cutoff_factor:  配位壳层 = 最近邻距离 × 此因子 (默认 1.3)
 
     Returns:
         {site_idx: {"cn": int, "avg_angle": float, "min_angle": float}}
