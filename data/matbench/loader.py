@@ -29,7 +29,11 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       no_coords: bool = False,
                       add_ewald: bool = False,
                       add_element_props: bool = False,
-                      add_comp_ewald: bool = False) -> dict:
+                      add_comp_ewald: bool = False,
+                      add_spacegroup: bool = False,
+                      add_density: bool = False,
+                      add_nn_stats: bool = False,
+                      add_comp_nn: bool = False) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -49,6 +53,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                    若只剩 element 则整个 sites 删除
         add_ewald: 是否添加 per-site Ewald 静电能 (ewald_energy)
         add_element_props: 是否添加 per-element 物理属性 (electronegativity, ionization_energy, electron_affinity)
+        add_spacegroup: 是否添加空间群编号和晶系 (spacegroup, crystal_system)
+        add_density: 是否添加密度和体积/原子 (density, vol_per_atom)
+        add_nn_stats: 是否添加全局最近邻距离统计 (nn_min, nn_mean)
+        add_comp_nn: 是否添加 per-element 平均最近邻距离到 composition (nn)
         add_comp_ewald: 是否添加 per-element 平均 Ewald 静电能到 composition (ewald)
 
     Returns:
@@ -68,8 +76,14 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     tokens_per_bond = 3  # elements(2) + dist(1)
 
     fixed_overhead = 7  # lattice(6) + target(1)
+    if add_spacegroup:
+        fixed_overhead += 2  # spacegroup(1) + crystal_system(1)
+    if add_density:
+        fixed_overhead += 2  # density(1) + vol_per_atom(1)
+    if add_nn_stats:
+        fixed_overhead += 2  # nn_min(1) + nn_mean(1)
     n_unique = len(set(str(site.specie) for site in structure))
-    if add_composition or add_element_props or add_comp_ewald:
+    if add_composition or add_element_props or add_comp_ewald or add_comp_nn:
         tokens_per_elem = 1  # element
         if add_composition:
             tokens_per_elem += 1  # ratio
@@ -77,6 +91,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             tokens_per_elem += 3  # en + ie + ea
         if add_comp_ewald:
             tokens_per_elem += 1  # ewald
+        if add_comp_nn:
+            tokens_per_elem += 1  # nn
         fixed_overhead += n_unique * tokens_per_elem
 
     # Bonds 保底：先预留 bonds 预算
@@ -141,6 +157,30 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         },
     }
 
+    # 空间群 + 晶系（对称性信息，零计算成本）
+    if add_spacegroup:
+        try:
+            from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+            sga = SpacegroupAnalyzer(structure)
+            doc["spacegroup"] = sga.get_space_group_number()
+            doc["crystal_system"] = sga.get_crystal_system()
+        except Exception:
+            pass  # 极少数畸变结构无法确定空间群
+
+    # 密度 + 体积/原子（基本物理量，零计算成本）
+    if add_density:
+        doc["density"] = round(float(structure.density), 4)
+        doc["vol_per_atom"] = round(float(structure.volume / len(structure)), 4)
+
+    # 全局最近邻距离统计（轨道重叠的直接代理量，与 band gap 相关 r=-0.46）
+    if add_nn_stats and len(structure) > 1:
+        import numpy as np
+        dm = structure.distance_matrix  # (N, N) 考虑周期性
+        np.fill_diagonal(dm, np.inf)
+        nn_dists = dm.min(axis=1)  # 每个 site 的最近邻距离
+        doc["nn_min"] = round(float(nn_dists.min()), 4)
+        doc["nn_mean"] = round(float(nn_dists.mean()), 4)
+
     # ── 处理 no_coords：条件性删除绝对坐标 ──
     if no_coords:
         for site_dict in sites_data:
@@ -162,8 +202,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         if effective_max_bonds > 0:
             doc["bonds"] = _compute_bonds(structure, effective_max_bonds)
 
-    # 组成信息 — per-unique-element（比例 + 物理属性 + Ewald 均值 合并）
-    if add_composition or add_element_props or add_comp_ewald:
+    # 组成信息 — per-unique-element（比例 + 物理属性 + Ewald 均值 + NN 均值 合并）
+    if add_composition or add_element_props or add_comp_ewald or add_comp_nn:
         from collections import Counter, defaultdict
         elem_counts = Counter(str(site.specie) for site in structure)
         total = sum(elem_counts.values())
@@ -184,6 +224,25 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                     for sym in sums
                 }
 
+        # per-element 平均最近邻距离
+        nn_by_elem = {}
+        if add_comp_nn and len(structure) > 1:
+            import numpy as _np
+            dm = structure.distance_matrix
+            _np.fill_diagonal(dm, _np.inf)
+            nn_dists = dm.min(axis=1)  # 每个 site 的最近邻距离
+            from collections import defaultdict as _dd
+            nn_sums = _dd(float)
+            nn_counts = _dd(int)
+            for site_idx, site in enumerate(structure):
+                sym = str(site.specie)
+                nn_sums[sym] += nn_dists[site_idx]
+                nn_counts[sym] += 1
+            nn_by_elem = {
+                sym: round(nn_sums[sym] / nn_counts[sym], 4)
+                for sym in nn_sums
+            }
+
         comp_list = []
         for elem, count in sorted(elem_counts.items()):
             entry = {"element": elem}
@@ -200,6 +259,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                     entry["ea"] = round(float(el.electron_affinity), 2)
             if add_comp_ewald and elem in ewald_by_elem:
                 entry["ewald"] = ewald_by_elem[elem]
+            if add_comp_nn and elem in nn_by_elem:
+                entry["nn"] = nn_by_elem[elem]
             comp_list.append(entry)
         doc["composition"] = comp_list
 
@@ -453,13 +514,18 @@ class MatbenchLoader:
         add_ewald = opts.get("add_ewald", False)
         add_element_props = opts.get("add_element_props", False)
         add_comp_ewald = opts.get("add_comp_ewald", False)
+        add_spacegroup = opts.get("add_spacegroup", False)
+        add_density = opts.get("add_density", False)
+        add_nn_stats = opts.get("add_nn_stats", False)
+        add_comp_nn = opts.get("add_comp_nn", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_tokens, add_angles,
                                       add_bonds, max_bonds,
                                       add_composition, no_coords,
                                       add_ewald, add_element_props,
-                                      add_comp_ewald, seed)
+                                      add_comp_ewald, add_spacegroup, add_nn_stats,
+                                      add_density, add_comp_nn, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -492,6 +558,14 @@ class MatbenchLoader:
             extras.append("add_element_props")
         if add_comp_ewald:
             extras.append("add_comp_ewald")
+        if add_spacegroup:
+            extras.append("add_spacegroup")
+        if add_density:
+            extras.append("add_density")
+        if add_nn_stats:
+            extras.append("add_nn_stats")
+        if add_comp_nn:
+            extras.append("add_comp_nn")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_tokens={max_tokens}{extras_msg})...")
@@ -516,6 +590,10 @@ class MatbenchLoader:
                 add_ewald=add_ewald,
                 add_element_props=add_element_props,
                 add_comp_ewald=add_comp_ewald,
+                add_spacegroup=add_spacegroup,
+                add_density=add_density,
+                add_nn_stats=add_nn_stats,
+                add_comp_nn=add_comp_nn,
             )
 
         import os
@@ -569,7 +647,9 @@ class MatbenchLoader:
 
     def _cache_path(self, task_name, max_tokens, add_angles,
                     add_bonds, max_bonds, add_composition, no_coords,
-                    add_ewald, add_element_props, add_comp_ewald, seed):
+                    add_ewald, add_element_props, add_comp_ewald,
+                    add_spacegroup, add_nn_stats, add_density,
+                    add_comp_nn, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
@@ -580,7 +660,11 @@ class MatbenchLoader:
         ewald_tag = "_ewald" if add_ewald else ""
         elprops_tag = "_elprops" if add_element_props else ""
         comp_ewald_tag = "_cewald" if add_comp_ewald else ""
-        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}_seed{seed}.pkl"
+        sg_tag = "_sg" if add_spacegroup else ""
+        dens_tag = "_dens" if add_density else ""
+        nn_tag = "_nn" if add_nn_stats else ""
+        cnn_tag = "_cnn" if add_comp_nn else ""
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
