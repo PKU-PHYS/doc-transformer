@@ -111,6 +111,9 @@ _MATBENCH_OPTIONS = [
     ("--add-comp-nn-stats",    {"action": "store_true", "default": False,
                                 "help": "[Matbench] Add per-element NN distance std/min/max to composition (requires --add-comp-nn)"},
      "add_comp_nn_stats"),
+    ("--add-mean-bonds",   {"action": "store_true", "default": False,
+                            "help": "[Matbench] Add per-element-pair mean bond distance (bonds_stats)"},
+     "add_mean_bonds"),
 ]
 
 # option_key → cache_tag 后缀
@@ -128,6 +131,7 @@ _OPTION_CACHE_TAGS = {
     "no_coords": "_nocoords",
     "add_comp_ewald_stats": "_cewalds",
     "add_comp_nn_stats": "_cnns",
+    "add_mean_bonds": "_mbonds",
 }
 
 

@@ -35,7 +35,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       add_nn_stats: bool = False,
                       add_comp_nn: bool = False,
                       add_comp_ewald_stats: bool = False,
-                      add_comp_nn_stats: bool = False) -> dict:
+                      add_comp_nn_stats: bool = False,
+                      add_mean_bonds: bool = False) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -100,6 +101,9 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         if add_comp_nn_stats:
             tokens_per_elem += 3  # nn_std + nn_min + nn_max
         fixed_overhead += n_unique * tokens_per_elem
+    if add_mean_bonds:
+        n_pairs = n_unique * (n_unique + 1) // 2
+        fixed_overhead += n_pairs * 3  # elements(2) + dist(1) per pair
 
     # Bonds 保底：先预留 bonds 预算
     bonds_budget = max_bonds * tokens_per_bond if add_bonds else 0
@@ -312,6 +316,10 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             comp_list.append(entry)
         doc["composition"] = comp_list
 
+    # 元素对平均键距
+    if add_mean_bonds and len(structure) > 1:
+        doc["bonds_stats"] = _compute_mean_bonds(structure)
+
     if target_val is not None:
         doc["target"] = round(float(target_val), 6)
 
@@ -500,6 +508,59 @@ def _compute_bonds(structure, max_bonds: int) -> List[dict]:
     return bonds
 
 
+def _compute_mean_bonds(structure, cutoff_factor: float = 1.3) -> List[dict]:
+    """
+    计算每对元素之间的平均配位键距。
+
+    只统计配位壳层内的真实化学键（最近邻距离 × cutoff_factor），
+    按元素对分组取平均距离，输出格式与 _compute_bonds 一致。
+
+    Args:
+        structure:      pymatgen Structure
+        cutoff_factor:  配位壳层 = 最近邻距离 × 此因子 (默认 1.3)
+
+    Returns:
+        List[dict] — [{"elements": ["O", "Ti"], "dist": 1.95}, ...] 按距离排序
+    """
+    from collections import defaultdict
+    n_sites = len(structure)
+    if n_sites <= 1:
+        return []
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        all_neighbors = structure.get_all_neighbors(r=5.0)
+
+    pair_dists = defaultdict(list)  # (elem1, elem2) sorted → [dist, ...]
+
+    for site_idx in range(n_sites):
+        neighbors = all_neighbors[site_idx]
+        if not neighbors:
+            continue
+
+        center_elem = str(structure[site_idx].specie)
+        neighbors_sorted = sorted(neighbors, key=lambda x: x.nn_distance)
+
+        min_dist = neighbors_sorted[0].nn_distance
+        cutoff = min_dist * cutoff_factor
+        coord_neighbors = [n for n in neighbors_sorted if n.nn_distance <= cutoff]
+
+        for n in coord_neighbors:
+            n_elem = str(n.specie)
+            pair_key = tuple(sorted([center_elem, n_elem]))
+            pair_dists[pair_key].append(n.nn_distance)
+
+    # 按平均距离排序输出
+    result = []
+    for (e1, e2), dists in pair_dists.items():
+        result.append({
+            "elements": [e1, e2],
+            "dist": round(float(np.mean(dists)), 4),
+        })
+    result.sort(key=lambda x: x["dist"])
+    return result
+
+
 def _stratified_sample(sites: List[dict], max_n: int) -> List[dict]:
     """按元素类型分层采样，保持化学组成比例。"""
     # 按元素分组
@@ -568,6 +629,7 @@ class MatbenchLoader:
         add_comp_nn = opts.get("add_comp_nn", False)
         add_comp_ewald_stats = opts.get("add_comp_ewald_stats", False)
         add_comp_nn_stats = opts.get("add_comp_nn_stats", False)
+        add_mean_bonds = opts.get("add_mean_bonds", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_tokens, add_angles,
@@ -576,7 +638,8 @@ class MatbenchLoader:
                                       add_ewald, add_element_props,
                                       add_comp_ewald, add_spacegroup, add_nn_stats,
                                       add_density, add_comp_nn,
-                                      add_comp_ewald_stats, add_comp_nn_stats, seed)
+                                      add_comp_ewald_stats, add_comp_nn_stats,
+                                      add_mean_bonds, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -621,6 +684,8 @@ class MatbenchLoader:
             extras.append("add_comp_ewald_stats")
         if add_comp_nn_stats:
             extras.append("add_comp_nn_stats")
+        if add_mean_bonds:
+            extras.append("add_mean_bonds")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_tokens={max_tokens}{extras_msg})...")
@@ -651,6 +716,7 @@ class MatbenchLoader:
                 add_comp_nn=add_comp_nn,
                 add_comp_ewald_stats=add_comp_ewald_stats,
                 add_comp_nn_stats=add_comp_nn_stats,
+                add_mean_bonds=add_mean_bonds,
             )
 
         import os
@@ -707,7 +773,8 @@ class MatbenchLoader:
                     add_ewald, add_element_props, add_comp_ewald,
                     add_spacegroup, add_nn_stats, add_density,
                     add_comp_nn,
-                    add_comp_ewald_stats, add_comp_nn_stats, seed):
+                    add_comp_ewald_stats, add_comp_nn_stats,
+                    add_mean_bonds, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
@@ -724,7 +791,8 @@ class MatbenchLoader:
         cnn_tag = "_cnn" if add_comp_nn else ""
         cewalds_tag = "_cewalds" if add_comp_ewald_stats else ""
         cnns_tag = "_cnns" if add_comp_nn_stats else ""
-        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}_seed{seed}.pkl"
+        mbonds_tag = "_mbonds" if add_mean_bonds else ""
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
