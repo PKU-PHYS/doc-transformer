@@ -25,8 +25,8 @@ class TokenEmbedding(nn.Module):
             frozen_lm_dim=config.frozen_lm_dim,
             n_fourier_feats=config.n_fourier_feats,
             fourier_learnable=config.fourier_learnable,
-            n_exponent_bins=config.n_exponent_bins,
-            exponent_offset=config.exponent_offset,
+            exponent_min=config.exponent_min,
+            exponent_max=config.exponent_max,
         )
         
         self.path_encoder = GRUPathEncoder(

@@ -103,13 +103,28 @@ class DocumentTransformer(nn.Module):
         if num_preds:
             preds_t = torch.cat(num_preds)
             targets_t = torch.tensor(num_targets, dtype=torch.float32, device=device)
-            # arcsinh(x/s)*s 压缩空间中计算 Huber Loss
-            # s=1 为强压缩（原始行为），s 越大越接近原始空间
+            # 尾数空间 Loss：用真实值的量级 2^E 归一化 pred 和 target
+            # clamp E 到 [E_min, E_max] 控制 scale 范围：
+            #   E_min=0 → 小值/零值 scale=1，不放大梯度
+            #   E_max=4 → 大值 scale≤16，适度归一化
+            _, e_true = torch.frexp(targets_t)
+            e_clamped = e_true.clamp(
+                self.config.loss_exponent_min,
+                self.config.loss_exponent_max,
+            )
+            scale = torch.pow(2.0, e_clamped.float())
+            m_pred = preds_t / scale
+            m_true = targets_t / scale
             s = self.config.loss_compression_scale
-            losses.append(F.huber_loss(
-                torch.arcsinh(preds_t / s) * s,
-                torch.arcsinh(targets_t / s) * s,
-                reduction='mean'))
+            k = self.config.loss_scale_power
+            per_sample = F.huber_loss(
+                torch.arcsinh(m_pred / s) * s,
+                torch.arcsinh(m_true / s) * s,
+                reduction='none')
+            # scale^k 量级补偿：k=0 无补偿, k=1 均匀梯度, k>1 偏重大值
+            if k != 0:
+                per_sample = per_sample * torch.pow(scale, k)
+            losses.append(per_sample.mean())
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)

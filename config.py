@@ -22,11 +22,20 @@ class ModelConfig:
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
     
     # 科学计数法解构 (Mantissa-Exponent Split)
-    n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
-    exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
+    # 指数嵌入的覆盖范围 (bins = max - min + 1, offset = -min)
+    exponent_min: int = -50     # 最小指数 → ~1e-15
+    exponent_max: int = 49      # 最大指数 → ~5.6e14
     
-    # Loss 大值压缩尺度 (arcsinh 的线性区宽度)
-    # =1: 强压缩（原始行为）; =5: 0~5 eV 内近似线性; =∞: 无压缩
+    # ── Loss 尾数空间配置 ──
+    # frexp 归一化时指数的 clamp 范围 (控制 scale = 2^E 的上下界)
+    # E_min=0 → scale≥1，避免小值/零值梯度被放大
+    # E_max=4 → scale≤16，适度归一化大值 (覆盖 ~0 到 ~16 的 target)
+    loss_exponent_min: int = 0
+    loss_exponent_max: int = 0
+    # 量级补偿指数: loss *= scale^k
+    # =0: 无补偿（大值梯度弱）; =1: 均匀梯度（对齐 MAE）; >1: 偏重大值
+    loss_scale_power: float = 0.0
+    # 额外压缩尺度: s·arcsinh(m/s)，=1 默认; >1 进一步放宽
     loss_compression_scale: float = 1.0
 
 

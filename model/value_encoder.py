@@ -41,7 +41,7 @@ class ValueEncoder(nn.Module):
       V_num = Fourier(M) + Embedding(E)
     """
     def __init__(self, d_model: int, frozen_lm_dim: int, n_fourier_feats: int, fourier_learnable: bool,
-                 n_exponent_bins: int = 100, exponent_offset: int = 50):
+                 exponent_min: int = -50, exponent_max: int = 49):
         super().__init__()
         
         # ── 数值型编码：Base-2 科学计数法解构 ──
@@ -51,10 +51,11 @@ class ValueEncoder(nn.Module):
             d_model=d_model, 
             learnable=fourier_learnable
         )
-        # 指数嵌入表（E 通常是 -50 ~ +49 之间的整数）
+        # 指数嵌入表：从 exponent_min/max 派生 bins 数和 offset
+        n_exponent_bins = exponent_max - exponent_min + 1
         self.exponent_embed = nn.Embedding(n_exponent_bins, d_model)
         self.n_exponent_bins = n_exponent_bins
-        self.exponent_offset = exponent_offset
+        self.exponent_offset = -exponent_min  # E=0 映射到 index -exponent_min
         
         # 文本型编码：先用 FrozenLM 得到特征，这里再做线性投影
         self.text_proj = nn.Linear(frozen_lm_dim, d_model)
