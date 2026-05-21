@@ -39,8 +39,8 @@ class ModelConfig:
     loss_compression_scale: float = 1.0
     
     # ── 零值分类头 ──
+    use_zero_head: bool = True     # 是否启用零值分类头
     zero_threshold: float = 0.01   # |target| < 此值视为"零值"（训练标签）
-    zero_loss_weight: float = 1.0  # BCE 分类 loss 的权重系数
 
 
 @dataclass

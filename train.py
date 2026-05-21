@@ -202,13 +202,17 @@ def _log_sample_case(model, out, batched_leaves, batched_masks,
 
         if truth_type == "number":
             pred_raw = model.decode_head.predict_number(mask_repr).item()
-            zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
             truth_f = float(truth_val)
             err = abs(pred_raw - truth_f)
             rel_err = err / (abs(truth_f) + 1e-8)
-            zero_tag = " → 0" if zero_logit > 0 else ""
-            print(f"    {prefix} number: pred={pred_raw:12.4f}  true={truth_f:12.4f}  "
-                  f"err={err:.4f} ({rel_err:.1%})  zero_logit={zero_logit:.3f}{zero_tag}")
+            if model.config.use_zero_head:
+                zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
+                zero_tag = " → 0" if zero_logit > 0 else ""
+                print(f"    {prefix} number: pred={pred_raw:12.4f}  true={truth_f:12.4f}  "
+                      f"err={err:.4f} ({rel_err:.1%})  zero_logit={zero_logit:.3f}{zero_tag}")
+            else:
+                print(f"    {prefix} number: pred={pred_raw:12.4f}  true={truth_f:12.4f}  "
+                      f"err={err:.4f} ({rel_err:.1%})")
         elif truth_type == "boolean":
             pred_logit = model.decode_head.predict_boolean(mask_repr).item()
             pred_bool = pred_logit > 0

@@ -58,9 +58,10 @@ def evaluate(model, test_loader, device, metric="mae"):
                         true_float = float(true_val)
 
                         # 零值分类头：logit > 0 (sigmoid > 0.5) → 直接输出 0
-                        zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
-                        if zero_logit > 0:
-                            pred_val = 0.0
+                        if model.config.use_zero_head:
+                            zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
+                            if zero_logit > 0:
+                                pred_val = 0.0
 
                         if metric == "mae":
                             errors.append(abs(pred_val - true_float))
