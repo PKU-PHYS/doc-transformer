@@ -41,6 +41,7 @@ class ModelConfig:
     # ── 零值分类头 ──
     use_zero_head: bool = True     # 是否启用零值分类头
     zero_threshold: float = 0.01   # |target| < 此值视为"零值"（训练标签）
+    zero_neg_weight: float = 2.0    # 非零样本在 BCE 中的权重（>1 惩罚误杀，即把非零判为零）
 
 
 @dataclass

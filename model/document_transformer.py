@@ -138,8 +138,14 @@ class DocumentTransformer(nn.Module):
             if self.config.use_zero_head and zero_preds:
                 zero_logits = torch.cat(zero_preds)
                 zero_labels = (targets_t.abs() < self.config.zero_threshold).float()
+                # 非零样本加权：惩罚误杀（把非零判为零）
+                sample_weights = torch.where(
+                    zero_labels == 1.0,
+                    torch.ones_like(zero_labels),
+                    torch.full_like(zero_labels, self.config.zero_neg_weight),
+                )
                 zero_loss_term = F.binary_cross_entropy_with_logits(
-                    zero_logits, zero_labels, reduction='mean')
+                    zero_logits, zero_labels, weight=sample_weights, reduction='mean')
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)
