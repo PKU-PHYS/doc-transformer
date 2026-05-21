@@ -79,6 +79,8 @@ class DocumentTransformer(nn.Module):
         str_preds = []
         str_targets = []
         
+        zero_preds = []
+        
         for b, masks in enumerate(target_masks):
             for idx, (truth_val, truth_type) in masks.items():
                 mask_repr = out[b, idx] # (d_model,)
@@ -87,6 +89,10 @@ class DocumentTransformer(nn.Module):
                     pred = self.decode_head.predict_number(mask_repr.unsqueeze(0))
                     num_preds.append(pred)
                     num_targets.append(float(truth_val))
+                    
+                    # 零值分类预测（独立分支）
+                    zero_logit = self.decode_head.predict_is_zero(mask_repr.unsqueeze(0))
+                    zero_preds.append(zero_logit)
                     
                 elif truth_type == "boolean":
                     pred = self.decode_head.predict_boolean(mask_repr.unsqueeze(0))
@@ -125,6 +131,13 @@ class DocumentTransformer(nn.Module):
             if k != 0:
                 per_sample = per_sample * torch.pow(scale, k)
             losses.append(per_sample.mean())
+            
+            # ── 零值分类 loss（独立，不影响回归 loss）──
+            zero_logits = torch.cat(zero_preds)
+            zero_labels = (targets_t.abs() < self.config.zero_threshold).float()
+            zero_loss = F.binary_cross_entropy_with_logits(
+                zero_logits, zero_labels, reduction='mean')
+            losses.append(zero_loss * self.config.zero_loss_weight)
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)

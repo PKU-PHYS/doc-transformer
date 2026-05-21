@@ -37,6 +37,10 @@ class ModelConfig:
     loss_scale_power: float = 0.0
     # 额外压缩尺度: s·arcsinh(m/s)，=1 默认; >1 进一步放宽
     loss_compression_scale: float = 1.0
+    
+    # ── 零值分类头 ──
+    zero_threshold: float = 0.01   # |target| < 此值视为"零值"（训练标签）
+    zero_loss_weight: float = 1.0  # BCE 分类 loss 的权重系数
 
 
 @dataclass
