@@ -24,6 +24,10 @@ class ModelConfig:
     # 科学计数法解构 (Mantissa-Exponent Split)
     n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
     exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
+    
+    # Loss 大值压缩尺度 (arcsinh 的线性区宽度)
+    # =1: 强压缩（原始行为）; =5: 0~5 eV 内近似线性; =∞: 无压缩
+    loss_compression_scale: float = 1.0
 
 
 @dataclass

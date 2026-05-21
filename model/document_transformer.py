@@ -103,8 +103,13 @@ class DocumentTransformer(nn.Module):
         if num_preds:
             preds_t = torch.cat(num_preds)
             targets_t = torch.tensor(num_targets, dtype=torch.float32, device=device)
-            # arcsinh 压缩空间中计算 Huber Loss，消除极端值导致的梯度方差
-            losses.append(F.huber_loss(torch.arcsinh(preds_t), torch.arcsinh(targets_t), reduction='mean'))
+            # arcsinh(x/s)*s 压缩空间中计算 Huber Loss
+            # s=1 为强压缩（原始行为），s 越大越接近原始空间
+            s = self.config.loss_compression_scale
+            losses.append(F.huber_loss(
+                torch.arcsinh(preds_t / s) * s,
+                torch.arcsinh(targets_t / s) * s,
+                reduction='mean'))
             
         if bool_preds:
             preds_t = torch.cat(bool_preds)
