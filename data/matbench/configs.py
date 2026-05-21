@@ -105,6 +105,12 @@ _MATBENCH_OPTIONS = [
     ("--no-coords",       {"action": "store_true", "default": False,
                            "help": "[Matbench] Remove per-site absolute coords (x,y,z); keep sites if angles present"},
      "no_coords"),
+    ("--add-comp-ewald-stats", {"action": "store_true", "default": False,
+                                "help": "[Matbench] Add per-element Ewald std/min/max to composition (requires --add-comp-ewald)"},
+     "add_comp_ewald_stats"),
+    ("--add-comp-nn-stats",    {"action": "store_true", "default": False,
+                                "help": "[Matbench] Add per-element NN distance std/min/max to composition (requires --add-comp-nn)"},
+     "add_comp_nn_stats"),
 ]
 
 # option_key → cache_tag 后缀
@@ -120,6 +126,8 @@ _OPTION_CACHE_TAGS = {
     "add_nn_stats": "_nn",
     "add_comp_nn": "_cnn",
     "no_coords": "_nocoords",
+    "add_comp_ewald_stats": "_cewalds",
+    "add_comp_nn_stats": "_cnns",
 }
 
 

@@ -33,7 +33,9 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       add_spacegroup: bool = False,
                       add_density: bool = False,
                       add_nn_stats: bool = False,
-                      add_comp_nn: bool = False) -> dict:
+                      add_comp_nn: bool = False,
+                      add_comp_ewald_stats: bool = False,
+                      add_comp_nn_stats: bool = False) -> dict:
     """
     将 pymatgen Structure 转为精简嵌套 JSON。
 
@@ -91,8 +93,12 @@ def structure_to_json(structure, target_val: Optional[float] = None,
             tokens_per_elem += 3  # en + ie + ea
         if add_comp_ewald:
             tokens_per_elem += 1  # ewald
+        if add_comp_ewald_stats:
+            tokens_per_elem += 3  # ewald_std + ewald_min + ewald_max
         if add_comp_nn:
             tokens_per_elem += 1  # nn
+        if add_comp_nn_stats:
+            tokens_per_elem += 3  # nn_std + nn_min + nn_max
         fixed_overhead += n_unique * tokens_per_elem
 
     # Bonds 保底：先预留 bonds 预算
@@ -211,33 +217,65 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         elem_counts = Counter(str(site.specie) for site in structure)
         total = sum(elem_counts.values())
 
-        # per-element 平均 Ewald（复用已计算的 ewald_energies）
+        # per-element Ewald（复用已计算的 ewald_energies）
         ewald_by_elem = {}
         if add_comp_ewald and ewald_energies is not None:
-            sums = defaultdict(float)
-            counts = defaultdict(int)
-            for site_idx, site in enumerate(structure):
-                sym = str(site.specie)
-                sums[sym] += ewald_energies[site_idx]
-                counts[sym] += 1
-            ewald_by_elem = {
-                sym: round(sums[sym] / counts[sym], 4)
-                for sym in sums
-            }
+            if add_comp_ewald_stats:
+                # 需要统计量：用 list 收集
+                vals_by_elem = defaultdict(list)
+                for site_idx, site in enumerate(structure):
+                    sym = str(site.specie)
+                    vals_by_elem[sym].append(ewald_energies[site_idx])
+                ewald_by_elem = {
+                    sym: {
+                        "mean": round(float(np.mean(vals)), 4),
+                        "std":  round(float(np.std(vals)), 4),
+                        "min":  round(float(np.min(vals)), 4),
+                        "max":  round(float(np.max(vals)), 4),
+                    }
+                    for sym, vals in vals_by_elem.items()
+                }
+            else:
+                # 只需均值
+                sums = defaultdict(float)
+                counts = defaultdict(int)
+                for site_idx, site in enumerate(structure):
+                    sym = str(site.specie)
+                    sums[sym] += ewald_energies[site_idx]
+                    counts[sym] += 1
+                ewald_by_elem = {
+                    sym: round(sums[sym] / counts[sym], 4)
+                    for sym in sums
+                }
 
-        # per-element 平均最近邻距离（复用已计算的 nn_dists）
+        # per-element 最近邻距离（复用已计算的 nn_dists）
         nn_by_elem = {}
         if add_comp_nn and nn_dists is not None:
-            nn_sums = defaultdict(float)
-            nn_counts = defaultdict(int)
-            for site_idx, site in enumerate(structure):
-                sym = str(site.specie)
-                nn_sums[sym] += nn_dists[site_idx]
-                nn_counts[sym] += 1
-            nn_by_elem = {
-                sym: round(nn_sums[sym] / nn_counts[sym], 4)
-                for sym in nn_sums
-            }
+            if add_comp_nn_stats:
+                nn_vals_by_elem = defaultdict(list)
+                for site_idx, site in enumerate(structure):
+                    sym = str(site.specie)
+                    nn_vals_by_elem[sym].append(nn_dists[site_idx])
+                nn_by_elem = {
+                    sym: {
+                        "mean": round(float(np.mean(vals)), 4),
+                        "std":  round(float(np.std(vals)), 4),
+                        "min":  round(float(np.min(vals)), 4),
+                        "max":  round(float(np.max(vals)), 4),
+                    }
+                    for sym, vals in nn_vals_by_elem.items()
+                }
+            else:
+                nn_sums = defaultdict(float)
+                nn_counts = defaultdict(int)
+                for site_idx, site in enumerate(structure):
+                    sym = str(site.specie)
+                    nn_sums[sym] += nn_dists[site_idx]
+                    nn_counts[sym] += 1
+                nn_by_elem = {
+                    sym: round(nn_sums[sym] / nn_counts[sym], 4)
+                    for sym in nn_sums
+                }
 
         comp_list = []
         for elem, count in sorted(elem_counts.items()):
@@ -254,9 +292,23 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                 if el.electron_affinity is not None:
                     entry["ea"] = round(float(el.electron_affinity), 2)
             if add_comp_ewald and elem in ewald_by_elem:
-                entry["ewald"] = ewald_by_elem[elem]
+                if add_comp_ewald_stats:
+                    stats = ewald_by_elem[elem]
+                    entry["ewald"] = stats["mean"]
+                    entry["ewald_std"] = stats["std"]
+                    entry["ewald_min"] = stats["min"]
+                    entry["ewald_max"] = stats["max"]
+                else:
+                    entry["ewald"] = ewald_by_elem[elem]
             if add_comp_nn and elem in nn_by_elem:
-                entry["nn"] = nn_by_elem[elem]
+                if add_comp_nn_stats:
+                    stats = nn_by_elem[elem]
+                    entry["nn"] = stats["mean"]
+                    entry["nn_std"] = stats["std"]
+                    entry["nn_min"] = stats["min"]
+                    entry["nn_max"] = stats["max"]
+                else:
+                    entry["nn"] = nn_by_elem[elem]
             comp_list.append(entry)
         doc["composition"] = comp_list
 
@@ -514,6 +566,8 @@ class MatbenchLoader:
         add_density = opts.get("add_density", False)
         add_nn_stats = opts.get("add_nn_stats", False)
         add_comp_nn = opts.get("add_comp_nn", False)
+        add_comp_ewald_stats = opts.get("add_comp_ewald_stats", False)
+        add_comp_nn_stats = opts.get("add_comp_nn_stats", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_tokens, add_angles,
@@ -521,7 +575,8 @@ class MatbenchLoader:
                                       add_composition, no_coords,
                                       add_ewald, add_element_props,
                                       add_comp_ewald, add_spacegroup, add_nn_stats,
-                                      add_density, add_comp_nn, seed)
+                                      add_density, add_comp_nn,
+                                      add_comp_ewald_stats, add_comp_nn_stats, seed)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
@@ -562,6 +617,10 @@ class MatbenchLoader:
             extras.append("add_nn_stats")
         if add_comp_nn:
             extras.append("add_comp_nn")
+        if add_comp_ewald_stats:
+            extras.append("add_comp_ewald_stats")
+        if add_comp_nn_stats:
+            extras.append("add_comp_nn_stats")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_tokens={max_tokens}{extras_msg})...")
@@ -590,6 +649,8 @@ class MatbenchLoader:
                 add_density=add_density,
                 add_nn_stats=add_nn_stats,
                 add_comp_nn=add_comp_nn,
+                add_comp_ewald_stats=add_comp_ewald_stats,
+                add_comp_nn_stats=add_comp_nn_stats,
             )
 
         import os
@@ -645,7 +706,8 @@ class MatbenchLoader:
                     add_bonds, max_bonds, add_composition, no_coords,
                     add_ewald, add_element_props, add_comp_ewald,
                     add_spacegroup, add_nn_stats, add_density,
-                    add_comp_nn, seed):
+                    add_comp_nn,
+                    add_comp_ewald_stats, add_comp_nn_stats, seed):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
@@ -660,7 +722,9 @@ class MatbenchLoader:
         dens_tag = "_dens" if add_density else ""
         nn_tag = "_nn" if add_nn_stats else ""
         cnn_tag = "_cnn" if add_comp_nn else ""
-        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}_seed{seed}.pkl"
+        cewalds_tag = "_cewalds" if add_comp_ewald_stats else ""
+        cnns_tag = "_cnns" if add_comp_nn_stats else ""
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
