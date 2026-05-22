@@ -11,3 +11,4 @@ runs/
 *.pkl
 data/tabular/cache/
 data/matbench/cache/
+tmp/

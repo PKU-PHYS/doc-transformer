@@ -72,7 +72,7 @@
 这三个组成部分各自回答一个问题：
 
 | 组成部分 | 回答的问题 | 类比 GPT |
-|----------|-----------|---------|
+|----------|-----------|---------| 
 | **值编码** | 这个值是什么？（"Fe2O3", 2.1, ...） | 词嵌入（"cat" 的含义） |
 | **路径编码** | 这个值在 JSON 树的哪个位置？ | 位置编码（第 3 个词） |
 | **Fork Bias** | 两个值的结构关系如何？（同组/跨组/哪层分叉） | T5 Relative Position Bias |
@@ -134,7 +134,7 @@ $$\mathbf{t}_i = \underbrace{\mathbf{v}_i}_{\text{值编码}} + \underbrace{\mat
 ### 3.1 值编码 $\mathbf{v}_i$
 
 | 数据类型 | 编码方式 |
-|----------|---------|
+|----------|---------| 
 | 数值型 | **Base-2 科学计数法解构** + 傅里叶特征映射（见下文详述） |
 | 文本型 | $\mathbf{v} = \mathbf{W}_\text{text} \cdot \text{FrozenLM}(x)$，冻结语言模型编码后投影 |
 | 布尔型 | $\mathbf{v} = \mathbf{W}_\text{bool} \cdot [x]$，0/1 标量投影 |
@@ -156,9 +156,11 @@ $$\text{Fourier}(M) = \left[\sin(\omega_1 M),\, \cos(\omega_1 M),\, \ldots,\, \s
 
 频率 $\omega$ 初始化为 $10^{[-1, 2]}$ 的对数均匀分布（因 $M$ 已归一化，无需覆盖 $10^{-4}$ 级低频）。
 
-**指数编码：** $E$ 通常是 $-50$ 到 $+49$ 之间的整数，使用查表嵌入：
+**指数编码：** $E$ 通常是 $-50$ 到 $+49$ 之间的整数（由 `exponent_min` 和 `exponent_max` 控制），使用查表嵌入：
 
 $$\mathbf{e} = \text{Embedding}(E + \text{offset}), \quad \text{Embedding} \in \mathbb{R}^{N_\text{bins} \times d}$$
+
+其中 $N_\text{bins} = \text{exponent\_max} - \text{exponent\_min} + 1$（默认 100 bins），$\text{offset} = -\text{exponent\_min}$（默认 50），确保 $E=0$ 映射到 index 50。
 
 **最终数值编码（两路相加）：**
 
@@ -180,7 +182,9 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
   路径编码 p = GRU([input_0, input_1, ...], h0)[-1]  # 取最终隐藏状态
 ```
 
-**核心优势**：GRU 天然序列敏感，精确编码路径节点的顺序和依赖关系。对短路径（如 Stage 0 的深度 2 路径 `["doc", "value"]`）信号传播效率极高。`node_type_emb` 显式区分 Dict Key（type=0）与 Array Instance（type=1）。
+**核心优势**：GRU 天然序列敏感，精确编码路径节点的顺序和依赖关系。对短路径（如深度 2 路径 `["doc", "value"]`）信号传播效率极高。`node_type_emb` 显式区分 Dict Key（type=0）与 Array Instance（type=1）。
+
+**性能优化**：使用 **Padded GRU**（非 `pack_sequence`），让 cuDNN 使用批量并行 kernel，backward 速度提升约 1000 倍。通过 `valid_lens` + `gather` 取每条路径最后一个真实位置的隐藏状态，与 `pack_sequence` 的输出完全一致。
 
 ### 3.3 Group-Fork Relative Attention Bias
 
@@ -193,8 +197,7 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
 
 偏置编码采用 **正弦编码 + 可学习线性投影**，每个注意力头获得独立的标量偏置，支持任意嵌套深度。初始化为零，训练稳定。
 
-> **方案 A（当前实现）**：fork bias 通过 `src_mask`（3D float tensor `[B*H, S, S]`）注入标准 `nn.TransformerEncoder`，零手写注意力代码。
-> **方案 B（未来备选）**：使用 PyTorch 2.5+ 的 `FlexAttention` + `score_mod` 回调，在 kernel 内部 on-the-fly 计算偏置，避免实例化 `[B, S, S]` 矩阵，内存效率更高。需配合 `torch.compile`。
+> **当前实现**：fork bias 通过 `src_mask`（3D float tensor `[B*H, S, S]`）注入标准 `nn.TransformerEncoder`，零手写注意力代码。Padding mask 与 fork bias 合并为统一的 float `src_mask`，避免 PyTorch 对 bool mask 和 float mask 类型不匹配的 warning。
 
 ---
 
@@ -204,43 +207,42 @@ $$\mathbf{v} = \underbrace{\mathbf{W}_\text{num} \cdot \text{Fourier}(M)}_{\text
 
 ```
 ./
-├── README.md                      # 子项目说明与运行指南
+├── README.md                      # 项目说明与运行指南
 ├── pixi.toml                      # Pixi 包管理配置
-├── config.py                      # 全局超参数与配置 (ModelConfig, TrainConfig)
+├── config.py                      # 全局超参数与配置 (ModelConfig, TrainConfig, MODEL_PRESETS)
 ├── data/
-│   ├── synthetic.py               # 顶层合成数据集与 Collate 函数
-│   ├── in_context_generator.py    # In-Context Learning 任务生成器
-│   ├── functions/                 # 数学函数注册表
-│   │   ├── __init__.py            # 导入并触发所有函数模块注册
-│   │   ├── registry.py            # 基类 MathRelation、FunctionRegistry 与工厂函数
-│   │   ├── unary.py               # 单变量函数 (sin, cos, exp, log, sqrt, ...)
-│   │   ├── binary.py              # 双变量函数 (add, sub, mul, div, pow, ...)
-│   │   ├── multivar.py            # 多变量函数 (weighted_sum, dot_product, ...)
-│   │   ├── implicit.py            # 扩展数学函数 (多项式/有理式等，支持隐式渲染)
-│   │   └── composite.py           # 复合函数 (链式组合，如 sin(x+y))
-│   ├── templates/                 # 结构模板引擎
+│   ├── __init__.py                # 统一导出 collate_fn, TabularDataset, TableLoader
+│   ├── base.py                    # 通用 collate_fn + fork_bias 计算 (compute_fork_bias_indices, compute_single_fork_bias)
+│   ├── tabular/                   # 表格数据管线
 │   │   ├── __init__.py
-│   │   ├── engine.py              # TemplateEngine: ~60 种基础 JSON 模板 (扁平/嵌套/数组/复合，含动态变体达数十万)
-│   │   └── distractors.py         # 干扰字段注入器 (inject_distractors)
-│   └── text_tasks/                # 纯文本推理任务生成器
+│   │   ├── configs.py             # 各表格数据集训练配方 (StageConfig, DatasetConfig, DATASET_CONFIGS)
+│   │   ├── loader.py              # TableLoader: 下载/缓存 + StandardScaler + BallTree 索引
+│   │   ├── dataset.py             # TabularDataset: query-aware 多行样本生成 (预计算邻居、路径模板、fork_bias)
+│   │   └── cache/                 # BallTree 磁盘缓存
+│   └── matbench/                  # Matbench 晶体材料数据管线
 │       ├── __init__.py
-│       └── generators.py          # TextTaskGenerator: 13 种跨模态桥接任务
+│       ├── configs.py             # Matbench 任务训练配方 + CLI 参数注册 (MatbenchTaskConfig, register_args, build_dataset_options)
+│       ├── loader.py              # MatbenchLoader: matminer 加载 → pymatgen Structure → 嵌套 JSON (含 angles/bonds/ewald 等)
+│       ├── dataset.py             # MatbenchDataset: 预解析 + fork_bias 缓存 + mask target
+│       └── cache/                 # 转换结果 + 预解析磁盘缓存
 ├── model/
 │   ├── __init__.py
 │   ├── json_parser.py             # JSON 递归解析算法 -> List[LeafNode]
-│   ├── frozen_lm.py               # 冻结句子模型包装与缓存机制
+│   ├── frozen_lm.py               # 冻结句子模型包装与缓存机制 (all-MiniLM-L6-v2)
 │   ├── value_encoder.py           # 值编码器（Base-2 frexp 尾数傅里叶 + 指数嵌入/文本/布尔/MASK）
 │   ├── path_encoder.py            # GRU 路径编码器（text + type_emb -> GRU -> 最终隐藏状态）
 │   ├── token_embedding.py         # 最终 token 嵌入组装 (Value + Path) + Batch 级去重
 │   ├── transformer.py             # ForkBiasEncoder + 标准双向 Transformer (fork bias 通过 src_mask 注入)
-│   ├── decode_head.py             # 类型特定解码头 (数值/布尔/文本，极小方差初始化)
-│   └── document_transformer.py    # 顶层模型：端到端前向传播与 arcsinh Loss 计算
-├── tests/
-│   ├── test_stage1_overfit.py     # 阶段 1：单样本无 Pad 过拟合测试 (Zero-Loss)
-│   ├── test_stage2_copy.py        # 阶段 2：单样本寻址与复制逻辑测试 (Logic Copy)
-│   └── test_stage3_padding.py     # 阶段 3：变长 Batch + Padding 阻断测试
-├── train.py                       # 正式训练入口 (四阶段课程学习 + TensorBoard)
-└── inference.py                   # 推理入口 (支持 --checkpoint 参数或自动查找最新权重)
+│   ├── decode_head.py             # 类型特定解码头 (数值/布尔/文本/零值分类，极小方差初始化)
+│   └── document_transformer.py    # 顶层模型：端到端前向传播与 Loss 计算
+├── tests/                         # 测试目录（当前为空，预留位置）
+├── train.py                       # 正式训练入口 (课程学习 + TensorBoard + 断点续训)
+├── eval.py                        # 评估模块 (MAE / RMSE 指标计算)
+├── inference.py                   # 推理入口 (支持 --checkpoint 参数或自动查找最新权重)
+├── slides/                        # Slidev 演示文稿
+│   ├── slides.md
+│   └── public/
+└── tmp/                           # 临时/分析脚本 (git ignored)
 ```
 
 ---
@@ -255,12 +257,12 @@ from dataclasses import dataclass
 
 @dataclass
 class ModelConfig:
-    d_model: int = 1536         # XXXL: 核心隐藏维度
-    n_layers: int = 16          # XXXL: Transformer 编码器层数
-    n_heads: int = 16           # XXXL: 注意力头数 (每个头 96 维)
-    d_ff: int = 6144            # XXXL: FFN 中间层维度
+    d_model: int = 512
+    n_layers: int = 8
+    n_heads: int = 8
+    d_ff: int = 2048
     dropout: float = 0.1
-    max_tokens: int = 512       # 截断阈值，单样本最大 token 数
+    max_tokens: int = 256       # 截断阈值，单样本最大 token 数
     
     # Frozen LM 配置
     frozen_lm_name: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -274,54 +276,67 @@ class ModelConfig:
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
     
     # 科学计数法解构 (Mantissa-Exponent Split)
-    n_exponent_bins: int = 100  # 指数嵌入表大小 (覆盖 E = -50 到 +49)
-    exponent_offset: int = 50   # 指数偏移 (E=0 映射到 index 50)
+    # 指数嵌入的覆盖范围 (bins = max - min + 1, offset = -min)
+    exponent_min: int = -50     # 最小指数 → ~1e-15
+    exponent_max: int = 49      # 最大指数 → ~5.6e14
+    
+    # ── Loss 尾数空间配置 ──
+    # frexp 归一化时指数的 clamp 范围 (控制 scale = 2^E 的上下界)
+    # E_min=0 → scale≥1，避免小值/零值梯度被放大
+    # E_max=0 → scale=1，即不归一化（当前默认）
+    loss_exponent_min: int = 0
+    loss_exponent_max: int = 0
+    # 量级补偿指数: loss *= scale^k
+    # =0: 无补偿（大值梯度弱）; =1: 均匀梯度（对齐 MAE）; >1: 偏重大值
+    loss_scale_power: float = 1.0
+    # 额外压缩尺度: s·arcsinh(m/s)，=1 默认; >1 进一步放宽
+    loss_compression_scale: float = 10.0
+    
+    # ── 零值分类头 ──
+    use_zero_head: bool = False     # 是否启用零值分类头
+    zero_threshold: float = 0.01   # |target| < 此值视为"零值"（训练标签）
+    zero_neg_weight: float = 1.0    # 非零样本在 BCE 中的权重（>1 惩罚误杀，即把非零判为零）
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 16        # XXXL @ 512 tokens: 实测峰值 ~11-21G / 23.4G
+    batch_size: int = 160
     lr: float = 1e-4            # AdamW 学习率
     weight_decay: float = 0.01  # AdamW 权重衰减
     betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
-    mask_ratio: float = 0.15    # 自监督掩码比例
     device: str = "cuda"
-    
-    # 课程学习配置 — 每阶段: max_epochs (上限) + patience (收敛判定)
-    # 当连续 patience 个 epoch loss 不下降时，自动进入下一阶段
-    stage0_max_epochs: int = 100
-    stage0_patience: int = 15
-    stage1_max_epochs: int = 100
-    stage1_patience: int = 15
-    stage2_max_epochs: int = 100
-    stage2_patience: int = 15
-    stage3_max_epochs: int = 100
-    stage3_patience: int = 15        
-    
-    dataset_size: int = 10000   # 每个 epoch 的样本数 (464M 模型需要足够数据)
-    
-    stage0_target_tokens: int = 20    
-    stage1_target_tokens: int = 60    
-    stage2_target_tokens: int = 150   
-    stage3_target_tokens: int = 200   
-    
-    stage0_distractor_level: int = 0  
-    stage1_distractor_level: int = 0  
-    stage2_distractor_level: int = 3  
-    stage3_distractor_level: int = 1  
+    num_workers: int = 0        # DataLoader 进程数 (0=主进程，避免 fork COW 开销)
+    max_cpu_workers: int = 32   # 全局 CPU 密集型任务（如数据预处理）的最大进程数
     
     checkpoint_dir: str = "checkpoints"
 ```
 
-### 5.1 模型长度限制与截断策略说明
+### 5.1 模型预设 (Model Presets)
 
-Document Transformer 中定义的 `max_tokens` (如 512) 是单条数据在被展平处理为叶子节点序列后的长度上限。需要特别注意：
+通过 `--model-size` 一键切换模型规模。内存瓶颈是注意力的 O(S²)，与 d_model 无关，因此 batch_size 不需要随模型变。
+
+```python
+MODEL_PRESETS = {
+    "small":  {"model": dict(d_model=192,  n_layers=4,  n_heads=4,  d_ff=768,  dropout=0.10)},
+    "medium": {"model": dict(d_model=384,  n_layers=6,  n_heads=6,  d_ff=1536, dropout=0.10)},
+    "large":  {"model": dict(d_model=512,  n_layers=8,  n_heads=8,  d_ff=2048, dropout=0.10)},
+    "xl":     {"model": dict(d_model=768,  n_layers=12, n_heads=12, d_ff=3072, dropout=0.10)},
+}
+```
+
+| Size | d_model | layers | heads | d_ff | dropout |
+|------|---------|--------|-------|------|---------|
+| small | 192 | 4 | 4 | 768 | 0.10 |
+| medium | 384 | 6 | 6 | 1536 | 0.10 |
+| large | 512 | 8 | 8 | 2048 | 0.10 |
+| xl | 768 | 12 | 12 | 3072 | 0.10 |
+
+### 5.2 模型长度限制与截断策略说明
+
+Document Transformer 中定义的 `max_tokens` (如 256) 是单条数据在被展平处理为叶子节点序列后的长度上限。需要特别注意：
 1. **Token 的本质**：在这里，一个 token 代表 JSON 树中的一个叶子节点（例如一个数值或一个字符串），而非 NLP 传统意义上的一个子词。
-2. **超长截断（Truncation）与致命隐患**：目前代码中采用了简单的顺序截断（超过 `max_tokens` 的尾部节点直接丢弃）。但这会带来一个**致命问题**：如果被截掉的尾部包含了逻辑推导的核心参数，而程序又恰好在剩下的节点里 MASK 了目标，这就会变成**无解任务（Unsolvable Task）**。
-3. **智能截断策略（Smart Truncation，概念阶段）**：由于不能简单使用 NLP 的定长滑动窗口，我们在未来应该采用**基于树结构与 Mask 关联度的筛选机制**。
-   - **先锁定目标**：在未经截断的完整树中，先选定要 Mask 的核心节点。
-   - **计算亲缘度**：计算所有节点与该 Mask 节点的结构距离（如：共享多长的 `path` 前缀、是否属于同一个 `group_id` 的同级元素）。同组元素、兄弟节点保留优先级最高；不相干的分支（如扰动字段 `author`, `timestamp` 等）保留优先级最低。
-   - **按优先级丢弃**：优先从低优先级的无关节点开始剔除，直到总节点数降至 `max_tokens`。
-4. **显存与计算复杂度**：由于标准全局双向 Transformer 具有 $O(N^2)$ 的注意力计算复杂度，如果将 `max_tokens` 设得过大（例如应对极大 JSON），将导致显存爆炸。因此，对于非常冗长的文档数据，应当考虑预先过滤掉无用的嵌套字段，或在未来改进中引入稀疏注意力 (Sparse Attention) 机制。
+2. **超长截断（Truncation）**：代码中采用简单的顺序截断（超过 `max_tokens` 的尾部节点直接丢弃）。
+3. **Matbench 动态 Token 预算**：`structure_to_json` 根据 `max_tokens` 动态计算 `max_sites`，优先为 bonds 预留预算，sites 用剩余预算。大结构先尝试 primitive cell 缩减，超限后按元素分层采样 (`_stratified_sample`)，保持化学组成比例。
+4. **显存与计算复杂度**：标准全局双向 Transformer 具有 $O(N^2)$ 注意力计算复杂度，`max_tokens` 设得过大会导致显存爆炸。
 
 ---
 
@@ -329,7 +344,6 @@ Document Transformer 中定义的 `max_tokens` (如 512) 是单条数据在被�
 
 ### 6.1 叶子节点数据结构与解析算法 (`model/json_parser.py`)
 
-**伪代码**：
 ```python
 from dataclasses import dataclass
 from typing import Any, List
@@ -341,7 +355,7 @@ class LeafNode:
     path: List[str]         # 根到叶子的文本标签序列（含实例节点）
     path_types: List[int]   # 每个路径节点的类型: 0=Dict Key, 1=Array Instance
     path_ids: List[int]     # 每个路径节点的唯一 ID (dict key: hash, array instance: 自增)
-    group_ids: List[int]    # 祖先数组元素对应的全局唯一组 ID（兼容旧代码）
+    group_ids: List[int]    # 祖先数组元素对应的全局唯一组 ID
 
 class JSONParser:
     def __init__(self):
@@ -357,7 +371,14 @@ class JSONParser:
             return [LeafNode(value=data, value_type="boolean", path=current_path,
                              path_types=current_path_types, path_ids=current_path_ids,
                              group_ids=current_groups)]
-        # ... (int/float/str/None 同理)
+        elif isinstance(data, (int, float)):
+            return [LeafNode(value=data, value_type="number", ...)]
+        elif isinstance(data, str):
+            if data == "[MASK]":
+                return [LeafNode(value=data, value_type="mask", ...)]
+            return [LeafNode(value=data, value_type="string", ...)]
+        elif data is None:
+            return []  # 忽略 None 值
             
         elif isinstance(data, dict):
             leaves = []
@@ -379,74 +400,227 @@ class JSONParser:
                 new_groups = current_groups + [self.group_counter]
                 leaves.extend(self.parse(item, new_path, new_types, new_ids, new_groups))
             return leaves
+        
+        else:
+            # 对于不支持的类型，转为字符串处理
+            return [LeafNode(value=str(data), value_type="string", ...)]
 ```
 
-### 6.2 合成数据生成流 (`data/synthetic.py`)
+### 6.2 数据源概览
 
-我们的合成数据不再只是简单的材料字典，而是包含了多类数学函数、推理任务和大量随机模板生成的丰富数据：
+当前项目支持两种数据源，各有独立的加载器 (Loader)、数据集 (Dataset) 和训练配方 (Config)：
 
-**生成流程核心组件**：
-1. **FunctionRegistry / TextTaskGenerator**：随机采样数学关系或文本推理任务。其中，纯文本推理任务 (`TextTaskGenerator`) 并非简单的占位符，而是被精心设计为**三大类跨模态桥接任务**：
-   - **数值 → 文本分类** (如根据数值大小判断 magnitude、正负号、象限)
-   - **文本 → 文本推理** (如输出反函数名称、计算导数表达式配对)
-   - **文本 → 数值检索** (如基于自然语言"archimedes_constant"输出 $3.141593$)
-   这三类任务直接强制模型将 FrozenLM 的语义向量空间与傅里叶特征的高维数值空间进行深度对齐。
-2. **FunctionRegistry 的 Tier 分级过滤**：每个注册的数学函数都带有 `tier` 属性（0=基础函数，含四则运算、基本三角/指数/对数/幂函数、比较函数等共 22 个；1=进阶函数，含反三角、双曲、隐函数、复合函数等）。在 Stage 0 中通过 `FunctionRegistry.set_filter(exact_tier=0)` 仅使用基础函数冷启动；其他阶段使用 `set_filter(max_tier=1)` 允许全部函数。
-3. **TemplateEngine**：负责将抽象的关系渲染为千变万化的 JSON 树。它囊括了 4 大类（扁平、嵌套、数组、复合函数专用）约 60 种基础模板结构，更在每次生成后引入**动态扰动后处理 (Post-processing Perturbations)**。结合键名同义词池的随机化与后处理变换，有效变体数可达数十万。此外 `render_simple` 方法专为 Stage 0 设计，强制使用最简扁平模板。
-4. **Distractor Injector**：随机向生成的 JSON 中插入完全无关的干扰分支（如 `timestamp`, `confidence` 等），迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点。
+| 数据源 | 目录 | 输入格式 | 典型任务 |
+|--------|------|----------|----------|
+| **Tabular** | `data/tabular/` | CSV / sklearn 内置数据集 | California Housing, Diabetes, Wine Quality |
+| **Matbench** | `data/matbench/` | matminer + pymatgen Structure | Band Gap, Formation Energy, Dielectric |
 
-**数据流伪代码**：
+### 6.3 表格数据管线 (`data/tabular/`)
+
+#### TableLoader (`data/tabular/loader.py`)
+
+负责数据加载、标准化和近邻索引：
+
 ```python
-def __getitem__(self, idx):
-    # 0. 设定函数难度层级
-    if current_mode == "simple":
-        FunctionRegistry.set_filter(exact_tier=0)
-    else:
-        FunctionRegistry.set_filter(max_tier=1)
+class TableLoader:
+    def __init__(self, df: pd.DataFrame, target_col=None, cache_dir="data/tabular/cache"):
+        # 分离数值列和类别列
+        # StandardScaler 标准化数值列
+        # 构建/加载 BallTree 缓存
     
-    # 1. 根据 train_mode 选择生成策略
-    if current_mode == "simple":
-        rel = FunctionRegistry.sample()
-        doc = TemplateEngine.render_simple(rel)  # 极简扁平模板
-    elif current_mode == "in_context":
-        return generate_in_context_task(...)      # In-Context 专用生成器
-    elif current_mode == "explicit_long" or (target_tokens is not None and target_tokens > 80):
-        doc = generate_mixed_long_document(target_tokens)  # 混合长文档（内部已含 distractor 注入）
-    else:  # "explicit" — 按概率分配
-        nested_prob = [0.0, 0.2, 0.5, 0.8][min(distractor_level, 3)]
-        r = random.random()
-        if r < text_task_ratio:
-            doc = TextTaskGenerator.generate()
-        elif r < text_task_ratio + 0.3:
-            doc = generate_compound_document(n_relations)   # 复合文档
-        elif r < text_task_ratio + 0.5:
-            doc = generate_array_document(n_items)          # 数组文档
-        else:
-            doc = generate_math_document()                  # 单关系文档
+    def precompute_neighbors(self, k: int) -> np.ndarray:
+        """批量预计算所有行的 K 近邻索引 (n_rows, k)"""
     
-    # 2. 解析成叶子节点序列
-    parser = JSONParser()
-    leaves = parser.parse(doc, ["doc"], [0], [JSONParser._key_hash("doc")], [])
+    def get_row_dict(self, idx: int) -> dict:
+        """返回第 idx 行的 flat dict"""
     
-    # 3. 超长截断
-    leaves = leaves[:self.max_tokens]
+    def split(self, test_ratio=0.2, seed=42) -> Tuple[TableLoader, TableLoader]:
+        """标准 train/test 分割"""
     
-    # 4. "输出优先" Mask 策略（4 级 fallback）
-    #    利用 TemplateEngine 返回的 safe_mask_keys 精准定位安全目标
-    #    避免 mask 不可逆函数 (max/min/abs/sign) 的输入
-    num_indices = [i for i, l in enumerate(leaves) if l.value_type == "number"]
-    # P1: TemplateEngine 返回的精确安全键名（当前关系的所有输出同义词）
-    candidates = [i for i in num_indices if leaves[i].path[-1] in safe_mask_keys]
-    # P2 fallback: 全局输出键名集合
-    if not candidates: candidates = [i for i in num_indices if leaves[i].path[-1] in _FALLBACK_OUTPUT_KEYS]
-    # P3 fallback: 所有非装饰性数值节点
-    if not candidates: candidates = [i for i in num_indices if leaves[i].path[-1] not in _DECORATION_KEYS]
-    # P4 fallback: 最后一个数值节点
-    if not candidates: candidates = [num_indices[-1]]
-    mask_indices = random.sample(candidates, min(num_masks, len(candidates)))
-    # 仍需更多 mask 时，从非数值节点补充
+    @classmethod
+    def from_builtin(cls, name: str, max_rows=None, target_col=None):
+        """从 sklearn 内置数据集创建 (california_housing, diabetes, wine_quality, covertype)"""
     
-    return leaves, target_masks
+    @classmethod
+    def from_csv(cls, path: str):
+        """从 CSV 文件创建"""
+```
+
+支持的内置数据集：
+- `california_housing`: 20640 行 × 9 列
+- `diabetes`: 442 行 × 10 列
+- `wine_quality`: 6497 行 × 12 列
+- `covertype`: 581012 行 × 54 列（默认截取 50000）
+
+#### TabularDataset (`data/tabular/dataset.py`)
+
+将表格行转为 JSON 数组文档，mask target 列预测：
+
+```python
+class TabularDataset(Dataset):
+    def __init__(self, loader: TableLoader, n_rows=5, max_tokens=512):
+        # 1. 预计算所有行的 K 近邻 (一次性 BallTree 查询)
+        # 2. 预构建路径模板 (所有样本共享相同的 key 结构)
+        # 3. 预计算 fork_bias (所有样本路径相同，只需算一次)
+    
+    def __getitem__(self, idx):
+        # 1. 取预计算的邻居行索引
+        # 2. 打乱行顺序，组装 LeafNode（复用模板路径）
+        # 3. Mask seed 行的 target 列
+        return leaves, target_masks, self._fork_bias
+```
+
+**数据流**：
+1. `__init__` 时预计算邻居 → 预构建路径模板 → 预计算 fork_bias
+2. `__getitem__` 只做：取行数据 → 填模板 → mask target → 返回
+3. fork_bias 为预计算的 `(T, T) int8` 张量，所有样本共享
+
+#### 表格数据训练配方 (`data/tabular/configs.py`)
+
+```python
+DATASET_CONFIGS = {
+    "california_housing": DatasetConfig(n_rows=1, stages=[StageConfig("train", 100, 15)]),
+    "diabetes":           DatasetConfig(n_rows=1, stages=[StageConfig("train", 200, 20)]),
+    "wine_quality":       DatasetConfig(n_rows=1, stages=[StageConfig("train", 100, 15)]),
+    "covertype":          DatasetConfig(n_rows=1, stages=[StageConfig("train", 50, 10)], max_rows=50000),
+}
+```
+
+### 6.4 Matbench 晶体材料数据管线 (`data/matbench/`)
+
+#### MatbenchLoader (`data/matbench/loader.py`)
+
+负责将 pymatgen Structure 转为精简嵌套 JSON：
+
+```python
+class MatbenchLoader:
+    def __init__(self, task_name: str, max_tokens=256, test_ratio=0.2, seed=42,
+                 dataset_options=None, max_cpu_workers=32):
+        # 1. 通过 matminer 加载 Matbench 数据集
+        # 2. 并行转换 Structure → JSON (joblib Parallel)
+        # 3. Train/Test split
+        # 4. 磁盘缓存
+```
+
+**`structure_to_json` 核心转换函数**：
+
+将 pymatgen Structure 转为精简嵌套 JSON dict。支持丰富的可选特征：
+
+| 选项 | CLI 参数 | 说明 |
+|------|----------|------|
+| `add_angles` | `--add-angles` | per-site 配位统计 (cn, avg_angle, min_angle) |
+| `add_bonds` | `--add-bonds` | 全局 bonds 列表（去重原子对 + 距离） |
+| `add_composition` | `--add-composition` | 元素比例数组 [{element, ratio}] |
+| `add_ewald` | `--add-ewald` | per-site Ewald 静电能 |
+| `add_element_props` | `--add-element-props` | per-element 物理属性 (en, ie, ea) |
+| `add_comp_ewald` | `--add-comp-ewald` | per-element 平均 Ewald 能 |
+| `add_comp_nn` | `--add-comp-nn` | per-element 平均最近邻距离 |
+| `add_spacegroup` | `--add-spacegroup` | 空间群编号 + 晶系 |
+| `add_density` | `--add-density` | 密度 + 体积/原子 |
+| `add_nn_stats` | `--add-nn-stats` | 全局最近邻距离统计 (nn_min, nn_mean) |
+| `no_coords` | `--no-coords` | 移除 per-site 绝对坐标 (x,y,z) |
+| `add_comp_ewald_stats` | `--add-comp-ewald-stats` | per-element Ewald std/min/max |
+| `add_comp_nn_stats` | `--add-comp-nn-stats` | per-element NN distance std/min/max |
+| `add_mean_bonds` | `--add-mean-bonds` | per-element-pair 平均键距 |
+
+**Token 预算动态分配**：
+1. 计算 fixed_overhead（lattice 6 + target 1 + 可选特征）
+2. Bonds 保底预留 `max_bonds × tokens_per_bond`
+3. Sites 用剩余预算：`max_sites = (max_tokens - overhead - bonds_budget) / tokens_per_site`
+4. 大结构先尝试 primitive cell 缩减，超限后按元素分层采样
+
+**Ewald 静电能计算三层策略**：
+1. sites ≤ 50 → BVAnalyzer（键价分析，物理最准）
+2. reduced_atoms ≤ 30 → `oxi_state_guesses(max_sites=-1)`（组成穷举）
+3. 都失败 → 跳过 Ewald 特征
+
+**转换后的 JSON 结构示例**：
+```json
+{
+  "lattice": {"a": 4.59, "b": 4.59, "c": 2.96, "alpha": 90.0, "beta": 90.0, "gamma": 90.0},
+  "spacegroup": 136,
+  "crystal_system": "tetragonal",
+  "density": 4.25,
+  "vol_per_atom": 15.88,
+  "nn_min": 1.95,
+  "nn_mean": 2.13,
+  "sites": [
+    {"element": "Ti", "x": 0.0, "y": 0.0, "z": 0.0, "cn": 6, "avg_angle": 90.0, "min_angle": 77.8, "ewald_energy": -12.45},
+    {"element": "O",  "x": 0.3, "y": 0.3, "z": 0.0, "cn": 3, "avg_angle": 120.0, "min_angle": 102.5, "ewald_energy": 6.22}
+  ],
+  "bonds": [{"elements": ["Ti", "O"], "dist": 1.95}, ...],
+  "composition": [{"element": "Ti", "ratio": 0.3333, "en": 1.54, "ewald": -12.45, "nn": 1.95}, ...],
+  "target": 3.2
+}
+```
+
+#### MatbenchDataset (`data/matbench/dataset.py`)
+
+```python
+class MatbenchDataset(Dataset):
+    def __init__(self, docs: list, max_tokens=512, target_key="target", cache_tag=None):
+        # 1. 预解析所有文档为 LeafNode 序列（根节点命名为 "crystal"）
+        # 2. 预计算每个样本的 target 叶子索引
+        # 3. 预计算每个样本的 fork_bias 矩阵 (int8 节省内存)
+        # 4. 磁盘缓存（跳过后续加载的解析开销）
+    
+    def __getitem__(self, idx):
+        # 1. 复制预解析的叶子（避免修改原数据）
+        # 2. Mask target 叶子
+        return leaves, target_masks, fork_bias
+```
+
+**与 TabularDataset 的核心区别**：
+- 每个样本的结构不同（site 数量不同）→ fork_bias 每个样本独立
+- 无 BallTree / 邻居：每个 structure 自包含全部信息
+- 路径深度更深 (2-4 层 vs tabular 的 2 层)
+
+#### Matbench 训练配方 (`data/matbench/configs.py`)
+
+```python
+MATBENCH_CONFIGS = {
+    "matbench_dielectric":  MatbenchTaskConfig(stages=[StageConfig("train", 100, 15)]),
+    "matbench_perovskites": MatbenchTaskConfig(stages=[StageConfig("train", 100, 15)]),
+    "matbench_mp_gap":      MatbenchTaskConfig(stages=[StageConfig("train", 200, 15)]),
+    "matbench_mp_e_form":   MatbenchTaskConfig(stages=[StageConfig("train", 50, 10)]),
+}
+```
+
+CLI 选项通过 `register_args()` → `build_dataset_options()` → `build_cache_tag()` 三个函数与 train.py 交互。
+
+### 6.5 通用 Collate 与 Fork Bias (`data/base.py`)
+
+**Fork Bias 预计算** (`compute_single_fork_bias`)：
+
+由于每个样本的路径在训练过程中不变，fork_bias 在数据集初始化时预计算并缓存为 `(T, T) int8` 张量：
+
+```python
+def compute_single_fork_bias(leaves: List[LeafNode]) -> torch.Tensor:
+    """单个样本的 fork bias 矩阵 (T, T) int8"""
+    # 构建 path_ids (1, T, D), is_group (1, T, D), valid_lens (1, T)
+    # 调用 compute_fork_bias_indices 批量计算
+    return result[0].to(torch.int8)  # 节省内存
+```
+
+**向量化分叉检测** (`compute_fork_bias_indices`)：
+
+```python
+def compute_fork_bias_indices(path_ids, is_group, valid_path_lens):
+    # 1. 逐元素比对路径 → match_matrix [B, S, S, L]
+    # 2. 找第一个不匹配位置 → first_mismatch_idx [B, S, S]
+    # 3. 检查该位置是否为 group 层级 → diverged_at_group
+    # 4. 输出 fork_level (0 = 无分叉或 dict key 分叉)
+    return where(~all_match & diverged_at_group, fork_level, 0)
+```
+
+**Collate 函数** (`collate_fn`)：
+
+```python
+def collate_fn(batch, max_tokens=512):
+    # 1. 双重截断保护（dataset 层 + collate 层）
+    # 2. 构建 padding_mask (B, max_len)
+    # 3. Pad + stack 预计算的 fork_bias → (B, max_len, max_len)
+    return batched_leaves, batched_masks, padding_mask, fork_bias_indices
 ```
 
 ---
@@ -483,21 +657,23 @@ class FourierFeatureEncoder(nn.Module):
 
 class ValueEncoder(nn.Module):
     def __init__(self, d_model, frozen_lm_dim, n_fourier_feats, fourier_learnable,
-                 n_exponent_bins=100, exponent_offset=50):
+                 exponent_min=-50, exponent_max=49):
         super().__init__()
         # 数值型编码：Base-2 科学计数法解构
         self.mantissa_encoder = FourierFeatureEncoder(n_fourier_feats, d_model, fourier_learnable)
-        self.exponent_embed = nn.Embedding(n_exponent_bins, d_model)  # E 查表
-        # 文本、布尔、掩码编码器 (略)
+        # 从 exponent_min/max 派生 bins 数和 offset
+        n_exponent_bins = exponent_max - exponent_min + 1  # 默认 100
+        self.exponent_embed = nn.Embedding(n_exponent_bins, d_model)
+        self.exponent_offset = -exponent_min  # E=0 映射到 index 50
+        # 文本投影、布尔投影、掩码向量 (略)
     
     def forward(self, node_types, raw_values, lm_embeddings=None):
         # 数值型：Base-2 torch.frexp 向量化编码
         if num_indices:
             raw = torch.tensor(num_vals, dtype=torch.float32, device=device)
+            raw = torch.nan_to_num(raw, nan=0.0, posinf=1e6, neginf=-1e6)
             m_tensor, e_tensor = torch.frexp(raw)
-            # m_tensor ∈ [0.5, 1.0) 或 (-1.0, -0.5]，x=0 时 m=0
-            # e_tensor 为整数指数，x = m * 2^e
-            e_indices = (e_tensor + self.exponent_offset).clamp(0, self.n_exponent_bins - 1)
+            e_indices = (e_tensor + self.exponent_offset).clamp(0, self.n_exponent_bins - 1).long()
             m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数
             e_emb = self.exponent_embed(e_indices)     # (N_num, d_model) — 查表获取量级
             out[num_indices] = m_emb + e_emb  # 直接相加
@@ -518,162 +694,195 @@ class ForkBiasEncoder(nn.Module):
         bias = self.proj(pe)                  # [B, S, S, num_heads]
         bias = bias.masked_fill(fork_levels.unsqueeze(-1) == 0, 0.0)  # level=0 → 0
         return bias.permute(0, 3, 1, 2).reshape(B * H, S, S)  # [B*H, S, S]
+
+class GlobalTransformer(nn.Module):
+    def __init__(self, config):
+        self.emb_norm = nn.LayerNorm(config.d_model)  # 嵌入层独立归一化
+        self.fork_bias_encoder = ForkBiasEncoder(config.n_heads, config.fork_bias_encoding_dim)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=config.d_model, nhead=config.n_heads,
+            dim_feedforward=config.d_ff, dropout=config.dropout,
+            activation="gelu", batch_first=True, norm_first=True  # Pre-LN
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.n_layers,
+                                              enable_nested_tensor=False)
+        self.out_norm = nn.LayerNorm(config.d_model)  # 输出归一化
+    
+    def forward(self, x, padding_mask=None, fork_bias_indices=None):
+        x = self.emb_norm(x)
+        # 构建统一的 float additive mask (B*H, S, S)
+        src_mask = torch.zeros(B * H, S, S, ...)
+        if fork_bias_indices is not None and fork_bias_indices.any():
+            src_mask = src_mask + self.fork_bias_encoder(fork_bias_indices)
+        if padding_mask is not None:
+            pad_bias = padding_mask.float() * (-1e9)  # True → -inf
+            src_mask = src_mask + pad_bias  # 广播到 (B*H, S, S)
+        out = self.encoder(x, mask=src_mask)
+        return self.out_norm(out)
 ```
 
-向量化分叉检测（在 `collate_fn` 中 CPU 计算）：
+### 7.3 解码头与 Loss 计算
+
+**解码头** (`model/decode_head.py`)：
+
+| 预测类型 | 线性层 | 初始化 |
+|----------|--------|--------|
+| 数值 | `Linear(d_model → 1)` | `std=0.001`, bias=0 |
+| 布尔 | `Linear(d_model → 1)` | `std=0.01` |
+| 文本 | `Linear(d_model → frozen_lm_dim)` | `std=0.01` |
+| 零值分类 | `Linear(d_model → 1)` | `std=0.01`, bias=0 |
+
+**尾数空间 Loss 计算** (`document_transformer.py: compute_loss`)：
+
+数值预测的 Loss 在**尾数空间**中计算，通过真实值的量级 $2^E$ 进行归一化：
+
 ```python
-def compute_fork_bias_indices(path_ids, is_group, valid_path_lens):
-    # 1. 逐元素比对路径 → match_matrix [B, S, S, L]
-    # 2. 找第一个不匹配位置 → first_mismatch_idx [B, S, S]
-    # 3. 检查该位置是否双方均为 Array Instance → diverged_at_group
-    # 4. 计算累计 group 数 → fork_level
-    return where(~all_match & diverged_at_group, fork_level, 0)
+# 1. 用真实值的指数做量级归一化
+_, e_true = torch.frexp(targets_t)
+e_clamped = e_true.clamp(loss_exponent_min, loss_exponent_max)
+scale = torch.pow(2.0, e_clamped.float())
+
+# 2. 归一化到尾数空间
+m_pred = preds_t / scale
+m_true = targets_t / scale
+
+# 3. arcsinh 压缩 + Huber Loss
+s = loss_compression_scale  # 默认 10.0
+per_sample = F.huber_loss(
+    torch.arcsinh(m_pred / s) * s,
+    torch.arcsinh(m_true / s) * s,
+    reduction='none')
+
+# 4. 量级补偿
+k = loss_scale_power  # =0 无补偿, =1 均匀梯度, >1 偏重大值
+if k != 0:
+    per_sample = per_sample * torch.pow(scale, k)
 ```
 
-### 7.3 主干网络与解码头
+**Loss 空间配置参数说明**：
+- `loss_exponent_min=0`: `scale ≥ 1`，避免小值/零值梯度被放大
+- `loss_exponent_max=0`: `scale = 1`（当前默认不归一化，即直接在原始空间 arcsinh）
+- `loss_scale_power=1.0`: `loss *= scale^k`，k=1 时梯度与量级无关，等效 MAE
+- `loss_compression_scale=10.0`: `s·arcsinh(m/s)`，s 越大压缩越温和
 
-**主干网络**直接调用 `torch.nn.TransformerEncoder`，设置 `norm_first=True`, `batch_first=True`。Fork bias 和 padding mask 都以 float 形式合并为单一的 `src_mask`（`[B*H, S, S]`），通过 `encoder(x, mask=src_mask)` 传入。padding 位置赋 `-1e9`（等效 $-\infty$），fork bias 为可学习偏置值。
+**零值分类头** (可选，`use_zero_head=True`)：
 
-> [!WARNING]
-> **Padding Mask 合并注意事项**：
-> 不再单独传 `src_key_padding_mask`，而是将 padding 信息（bool → float × -1e9）与 fork bias 合并为统一的 float `src_mask`。这避免了 PyTorch 对 bool mask 和 float mask 类型不匹配的 warning。
+```python
+# 训练时：独立的 BCE loss（detach 阻断梯度回流 backbone）
+zero_logit = self.decode_head.predict_is_zero(mask_repr.detach().unsqueeze(0))
+zero_labels = (targets_t.abs() < zero_threshold).float()
+sample_weights = where(zero_labels == 1, 1.0, zero_neg_weight)  # 非零加权
+zero_loss = F.binary_cross_entropy_with_logits(zero_logits, zero_labels, weight=sample_weights)
 
-**解码头**仅提取被掩码节点的向量：
-- **数值型预测**：`pred_val = Linear(d_model -> 1)(h_mask).squeeze()`，在 **arcsinh 压缩空间**中使用 `HuberLoss`（即 `HuberLoss(arcsinh(pred), arcsinh(target))`）。arcsinh 变换消除了极端数值（如 $10^4$）带来的梯度方差爆炸，使模型对大数值和小数值同等敏感。
-- **布尔型预测**：使用 `BCEWithLogitsLoss`。
-- **文本型预测**：投影到 384 维后，使用 Cosine Embedding Loss 对齐 `FrozenLM(target_text)`。
+# 推理时：logit > 0 (sigmoid > 0.5) → 直接输出 0；否则输出回归头预测
+```
+
+**布尔预测**：`BCEWithLogitsLoss`。
+**文本预测**：投影到 384 维后，用 `CosineEmbeddingLoss` 对齐 `FrozenLM(target_text)`。
 
 ### 7.4 Token 嵌入引擎的全局去重与缓存优化 (Global Deduplication & Caching)
-为打破 `FrozenLM` 处理大规模深层 JSON 时带来的推理瓶颈（即同一 Batch 的不同节点内大量重复出现如 `"materials"`, `"formula"` 等短语），底层网络引入了两项超前性能优化：
-1. **Batch 级全局词表去重 (Global Token Lookup)**：在每次前向传播的起始阶段 (`TokenEmbedding`)，引擎会主动提取当前 Batch 内所有叶子的字符串值和路径节点，放入 `set` 统一去重。提取出的独一无二的词汇表会被“一次性”送入语言模型，并建立 `text_lookup` 哈希表供后续路径编码和值编码查询，将庞大 Batch 下的大量冗余文本推理开销瞬间清零。
-2. **跨步内存级缓存与防爆机制 (Eviction Policy)**：`FrozenLM` 内部封装了带状态的字典缓存 (`self._cache`)，使跨 Batch 间频繁出现的高频键名永远只需编码一次。同时加入了**自动驱逐清洗机制** (`if len(self._cache) > 10000: self._cache.clear()`)，完美杜绝了持续数万个 Epoch 的海量生僻随机词采样可能引发的 GPU 显存泄漏 (OOM) 崩溃问题。
+
+为打破 `FrozenLM` 处理大规模深层 JSON 时带来的推理瓶颈（即同一 Batch 的不同节点内大量重复出现如 `"element"`, `"lattice"` 等短语），底层网络引入了以下性能优化：
+
+1. **Batch 级全局词表去重 (Global Token Lookup)**：在每次前向传播的起始阶段 (`TokenEmbedding`)，引擎会主动提取当前 Batch 内所有叶子的字符串值和路径节点，放入 `set` 统一去重。提取出的独一无二的词汇表会被"一次性"送入语言模型，并建立 `text_to_idx` 哈希表供后续路径编码和值编码查询，将庞大 Batch 下的大量冗余文本推理开销瞬间清零。
+
+2. **跨步内存级缓存与防爆机制 (Eviction Policy)**：`FrozenLM` 内部封装了带状态的字典缓存 (`self._cache`)，使跨 Batch 间频繁出现的高频键名永远只需编码一次。同时加入了**自动驱逐清洗机制** (`if len(self._cache) > 10000: self._cache.clear()`)，完美杜绝了持续数万个 Epoch 的海量词采样可能引发的 GPU 显存泄漏 (OOM) 崩溃问题。
+
 3. **Batch 级展平优化 (Batch Flattening)**：`DocumentTransformer.forward()` 在嵌入阶段会先将整个 Batch 的 leaves 展平为一个大列表，单次调用 `TokenEmbedding` 处理所有 leaves（内部已按类型分组批量化），然后 scatter 回 `(B, max_len, d_model)`。嵌入阶段关闭 `autocast` 以避免手动张量赋值与 BF16 的不兼容问题。
-4. **Fork Bias 计算**：`collate_fn` 在 CPU 上批量提取 `path_ids` 和 `path_types`，调用 `compute_fork_bias_indices()` 向量化计算 fork level 矩阵（O(B*S^2*L)），与叶子节点和 padding mask 一起返回。训练循环中移至 GPU 后传入 `model.forward()`。
 
-## 八、训练策略与课程学习 (Curriculum Learning)
-
-整个训练过程被设计为四个由易到难的课程阶段，逐步提升任务复杂度与干扰噪声：
-
-### 阶段 0：极简预热训练 (Stage 0 - Simple)
-- **目标**：在没有嵌套、干扰字段和数组等复杂 JSON 结构的理想环境下，使得刚初始化的冷启动模型快速学会最基础的数值傅里叶映射与加减乘除逻辑对应关系。
-- **数据**：固定为全扁平键值对 (如 `{"a": 1, "b": 2, "func": "add", "result": 3}`)。
-- **配置**：`target_tokens=20`, `distractor_level=0`。
-
-### 阶段 1：复合与树状结构基础训练 (Stage 1 - Composite)
-- **切换时机**：Stage 0 的 Loss 趋于收敛（patience 触发）。
-- **数据形态**：单条或多条数学关系打包的 JSON 文档，包含嵌套结构（如 `{params: {...}, result: val}`）、复合文档（多条关系打包为子对象）、数组文档（多个同结构对象组成的 JSON 数组）和文本推理任务，内部包含显式的函数名称字段（如 `function: "sin"`）。
-- **训练目的**：让模型在 Stage 0 的数值基础上，进一步学会理解树状结构、GRU 路径编码和 Fork Bias 引导的跨组注意力。
-- **配置**：`train_mode="explicit"`, `target_tokens=60`, `distractor_level=0`。
-- **函数过滤**：`FunctionRegistry.set_filter(max_tier=1)`，允许 Tier 0 和 Tier 1 函数。
-
-### 阶段 2：抗噪训练 (Stage 2 - Anti-noise)
-- **切换时机**：Stage 1 的 Loss 趋于收敛。
-- **数据形态**：混合长文档，包含多条数学关系、文本任务和大量干扰字段（Distractors），通过 `generate_mixed_long_document` 循环追加内容直至接近 `target_tokens`。
-- **训练目的**：迫使注意力机制学会在海量噪声中精准锁定有逻辑关联的有效节点，增强模型在真实噪音环境下的鲁棒性。
-- **配置**：`train_mode="explicit_long"`, `target_tokens=150`, `distractor_level=3`（重度干扰）。
-
-### 阶段 3：上下文规则归纳 (Stage 3 - In-Context Learning)
-- **切换时机**：Stage 2 的 Loss 趋于收敛。
-- **数据形态**：包含多个对象的纯 JSON 数组（Few-shot 演示），**移除显式的 `function` 字段**。多条 demonstrations 与 1 条 query 并列放入同一个数组中。
-- **训练目的**：迫使模型激活多头注意力机制，跨越 JSON 组别观察前序数据的输入输出对，推断出隐含的数学规律，并应用到预测目标（`[MASK]`）上。
-- **配置**：`train_mode="in_context"`, `target_tokens=200`, `distractor_level=1`（轻度干扰）。
-
-**伪代码：In-Context 数据生成 (`data/in_context_generator.py`)**
-```python
-def generate_in_context_task(target_tokens=None, max_tokens=512, distractor_level=0):
-    # 1. 拿到一个 generator 引用，多次调用获取同类函数的不同采样
-    gen = FunctionRegistry.sample_generator()
-    
-    # 2. 动态计算 shots 数量（根据 target_tokens 自适应）
-    if target_tokens is not None:
-        tokens_per_shot = random.randint(8, 14)  # 实测平均值
-        query_reserve = tokens_per_shot + 5       # 为 query 预留的 token 数
-        available = max(target_tokens - query_reserve, tokens_per_shot)
-        actual_shots = max(1, min(40, available // tokens_per_shot))
-        actual_shots = max(1, min(40, int(actual_shots * random.uniform(0.7, 1.3))))  # ±30% 随机性
-    else:
-        actual_shots = random.randint(2, 6)
-    
-    # 3. 生成 demonstrations + query（全部使用 render_implicit 隐去函数名）
-    context_jsons = []
-    for _ in range(actual_shots):
-        companion_rel = gen()
-        doc = TemplateEngine.render_implicit(companion_rel)
-        if distractor_level > 0:
-            inject_distractors(doc, ...)
-        context_jsons.append(doc)
-    
-    target_doc = TemplateEngine.render_implicit(gen())
-    
-    # 4. 纯数组并列结构（不使用 dict 包装）
-    final_batch = context_jsons + [target_doc]
-    
-    # 5. 解析并 Mask 最后一个元素的数值/字符串节点
-    parser = JSONParser()
-    leaves = parser.parse(final_batch, ["records"], [0], [JSONParser._key_hash("records")], [])
-    # 通过 group_ids 定位 query（数组最后一个元素的所有叶子共享同一 group_id）
-    last_group_id = leaves[-1].group_ids[0] if leaves and leaves[-1].group_ids else None
-    if last_group_id is not None:
-        query_indices = [i for i, node in enumerate(leaves)
-                         if node.group_ids and node.group_ids[0] == last_group_id
-                         and node.value_type in ("number", "string")]
-    else:
-        query_indices = []
-    
-    if query_indices:
-        mask_indices = random.sample(query_indices, min(len(query_indices), random.randint(1, 2)))
-    else:
-        # fallback: 当 query_indices 为空时，随机 mask 10% 节点
-        num_masks = max(1, int(len(leaves) * 0.1))
-        mask_indices = random.sample(range(len(leaves)), min(num_masks, len(leaves)))
-    
-    return leaves, target_masks
-```
-
-### 关于 Mixed 模式
-`train_mode="mixed"` 作为一个可选的混合模式保留在 `SyntheticDataset` 中，当被选中时会按权重随机分配：40% explicit + 40% in_context + 20% explicit_long。可用于未来的混合鲁棒性训练阶段，防止灾难性遗忘。
-
-### 8.4 大规模参数训练稳定性保障 (Scaling up to XXXL)
-当模型规模扩大至大参数级别（例如 `d_model=1536, L=16`，约 4.6 亿参数）且使用 `norm_first=True` 时，底层网络的输出方差会极大，如果目标函数又是大数值范围（如指数运算），极易引发 Huber Loss 瞬间爆炸（> 500）与动量崩溃。
-
-为保障大模型训练稳定性，实现中必须包含以下防线：
-1. **Step 级学习率预热 (Warmup)**：绝对禁止大模型直接以 `1e-4` 等高学习率冷启动。使用 `get_cosine_schedule_with_warmup`，预热步数为 `min(625, total_steps // 10)`（约 10% 或固定上限 625 步，防止长阶段过度预热）。`scheduler.step()` 在每个 Batch 结束后执行，实现细粒度平滑过渡。
-2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重必须用极小的方差（如 `std=0.001`）初始化，偏置设为 `0.0`。这迫使大模型在训练初期的盲目猜测阶段输出接近 `0` 的保守数值，避免巨大误差带来的毁灭性梯度惩罚，为主干网络争取建立注意力几何的时间。此外，为全面保障各类目标的预测稳定性，布尔分类头 (`bool_head`) 和文本匹配头 (`text_head`) 的权重也应当应用较小的方差（如 `std=0.01`）进行初始化约束。
-3. **消除傅里叶特征的高频混叠**：由于 Base-2 frexp 解构后尾数 $M \in [-1, 1]$ 已天然归一化，傅里叶频率初始化为 $10^{[-1, 2]}$ 的对数均匀分布即可覆盖从宏观趋势（0.1）到微观精度（100）的全部特征尺度。量级信息由指数嵌入表 `exponent_embed` 独立处理，彻底消除了大数值混叠问题。
-4. **Fork Bias 零初始化**：`ForkBiasEncoder` 的投影层权重和偏置初始化为零，确保训练初期注意力分数不受未学习偏置的干扰。随训练推进，模型逐渐学会对不同 fork level 施加恰当的偏置。
-5. **嵌入层独立归一化 (Embedding LayerNorm)**：当主干 Transformer 使用 `norm_first=True` (Pre-LN) 时，第一层的 LayerNorm 是作用在注意力的分支上，而残差主干（Residual Stream）在初始阶段未受任何归一化约束。由于最终的 Token 嵌入是值和路径编码之和，存在初始方差累积。必须在传入 `TransformerEncoder` 前额外应用一个全局的 `nn.LayerNorm(d_model)`（代码中为 `GlobalTransformer.emb_norm`），截断残差流初始的方差膨胀。此外，Transformer 输出后还加了一层 `out_norm = nn.LayerNorm(d_model)` 用于稳定解码头的输入分布。
-6. **全局梯度范数裁剪 (Gradient Clipping)**：在每个训练步的 `scaler.unscale_()` 之后、`scaler.step()` 之前，对全部参数执行 `clip_grad_norm_(max_norm=1.0)`。这是防止偶发的极端样本（如指数函数产生的大数值）导致单步梯度爆炸、破坏已学习注意力几何的最后一道防线。裁剪后的梯度范数同时被记录至 TensorBoard (`grad_norm`)，用于诊断训练是否处于稳定区间。
-
-### 8.5 自动化课程学习调度与工程化加速
-为保障四阶段课程学习连续平稳进行并极大化利用硬件算力，训练入口 (`train.py`) 需要部署以下工程组件：
-1. **基于 Patience 的自动阶段流转**：摒弃单一的 `epochs` 设置。为每个阶段设置独立的目标词元长度 (`target_tokens`) 和干扰强度 (`distractor_level`)。利用 `patience` 机制监控阶段收敛，当验证 Loss 连续 `patience` 轮不再改善时，自动保存模型并无缝切换至下一阶段（例如从 Stage 1 进入 Stage 2），极大减少人工干预。
-2. **混合精度训练 (BF16 AMP)**：当模型攀升至数亿参数，应当使用 `torch.amp.autocast('cuda', dtype=torch.bfloat16)` 进行混合精度训练。BFloat16 保留了与 FP32 相同的指数位，既有效杜绝了大规模数值计算时的下溢出，又能大幅降低显存开销并带来近 2 倍的吞吐量提升。**注意**：由于 BF16 与 FP32 指数范围相同，不存在 FP16 的下溢问题，因此 `GradScaler` 应被禁用（`enabled=False`），不需要动态 loss scaling。
-3. **多维指标监控与诊断**：引入 TensorBoard 实时记录各阶段的训练动态（Loss, 学习率, GPU显存/峰值利用率, 梯度范数）。每 200 个 batch 调用 `_log_sample_case` 展示详细诊断输出，包括：将叶子节点按组关联分为 Useful Leaves（与 mask 同组）和 Distractor Leaves（无关干扰），自动推断函数上下文（通过 `FUNC_NAME_KEYS` 匹配函数名字段），并分类型显示预测值与真实值的对比（数值显示绝对/相对误差，布尔显示 logit，文本显示余弦相似度）。全部阶段完结后自动绘制跨阶段的 Loss 曲线图像供后续归纳总结。
-4. **完全可复现的断点续训 (Deterministic Resume)**：每个 checkpoint 除模型权重外，还完整保存 optimizer state_dict、scheduler state_dict、GradScaler state_dict、当前 epoch/global_step、best_loss 以及 Python/PyTorch/CUDA 的全部随机数生成器状态 (`get_rng_states`)。恢复时先加载模型权重，再通过 `scheduler.load_state_dict()` 精确恢复学习率调度器状态（若 checkpoint 中缺少 scheduler 状态，则 fallback 为循环快进到对应 step），最后恢复 RNG 状态，确保数据生成和 dropout 等随机行为与连续训练完全一致。训练入口支持 `--resume <checkpoint.pth>` 命令行参数，自动识别 checkpoint 所属阶段并跳过已完成的前序阶段。
+4. **路径编码零逐元素操作**：`TokenEmbedding` 在 Python 侧收集所有路径数据为普通列表，最后一次性创建张量。路径文本嵌入通过高级索引赋值 `path_text_embs[row_indices, col_indices] = unique_embs[emb_indices]` 完成，1 次 CUDA 操作代替 N×L 次。
 
 ---
 
-## 九、验证计划 (Sanity Check)
+## 八、训练策略 (`train.py`)
 
-**强制执行**以下三阶段测试，任何阶段失败禁止进入下一阶段。
+### 8.1 训练架构概览
 
-> [!NOTE]
-> 三个测试均使用**缩小版模型** (`d_model=128, n_layers=2, n_heads=4, d_ff=256`) 以保证在数秒内完成。
-> 通过阈值相应放宽，仅验证逻辑正确性（嵌入→注意力→解码通路是否打通），不验证大模型学习能力。
+训练入口 `train.py` 支持两种数据路径：
 
-### 阶段 1：单样本过拟合测试 (`test_stage1_overfit.py`)
-- **操作**：死循环只喂 1 条固定字典，如 `{"val1": 1.0, "val2": 2.0, "pred": [MASK]}` (GT=3.0)。不经过 collate 的 batching，没有 pad。
-- **断言判断**：100 step 内，Loss < 1e-4（在 arcsinh 压缩空间下，等效于原始误差极小）。
+1. **Tabular 路径**：`--dataset california_housing` → `TableLoader` + `TabularDataset`
+2. **Matbench 路径**：`--dataset matbench_mp_gap` → `MatbenchLoader` + `MatbenchDataset`
 
-### 阶段 2：寻址与复制测试 (`test_stage2_copy.py`)
-- **操作**：动态生成 N 条字典，如 `{"source": {"id": "Fe", "val": RANDOM}, "target": {"id": "Fe", "pred": [MASK]}}`。
-- **任务**：模型学会根据同级的 `id` 相等，去 `source` 把 `val` 原封不动搬到 `pred`。
-- **断言判断**：2000 step 后，对全新随机数值的平均复制误差 `< 0.25`。证明路径和组嵌入引导了 Attention 构建起正确的空间几何。
+两种路径共享同一个 `train_stage()` 函数和 `DocumentTransformer` 模型。
 
-### 阶段 3：Padding & Batch 阻断测试 (`test_stage3_padding.py`)
-- **操作**：将阶段 2 的任务加入到不同长度的数组里，手动构造带 padding mask 的 Batch Tensor。
-- **断言判断**：3000 step 后，带 pad 和不带 pad 的预测误差均 `< 0.4`。证明 `-inf` 被正确应用于行列双向，没有 Ghost Entanglement。
+### 8.2 课程学习 (Curriculum Learning)
 
-### 阶段 4：正式训练 (`train.py`)
-在合成数据生成器的无限流下按四阶段课程学习训练：Stage 0 极简预热 → Stage 1 复合结构基础 → Stage 2 抗噪训练 → Stage 3 In-Context 归纳能力。每阶段基于 patience 自动切换，保存 Checkpoint，完成后运行 `inference.py`。
+每个数据集配方定义独立的训练阶段列表 (`stages`)，每阶段包含：
+- `name`: 阶段名称
+- `max_epochs`: 最大 epoch 数
+- `patience`: 连续 N 个 epoch loss 不下降则视为收敛
+
+```python
+for stage_idx, stage_cfg in enumerate(stages):
+    dataset = build_dataset(stage_cfg, ...)
+    log, global_step = train_stage(
+        model, dataset,
+        max_epochs=stage_cfg.max_epochs,
+        patience=stage_cfg.patience,
+        ...
+    )
+```
+
+### 8.3 训练稳定性保障
+
+1. **Step 级学习率预热 (Warmup)**：使用 `get_cosine_schedule_with_warmup`，预热步数为 `min(625, total_steps // 10)`。`scheduler.step()` 在每个 Batch 结束后执行，实现细粒度平滑过渡。
+
+2. **极小方差初始化解码头**：数值预测头 `DecodeHead` (`nn.Linear(d_model, 1)`) 的权重用极小方差（`std=0.001`）初始化，偏置设为 `0.0`。布尔分类头和文本匹配头的权重用 `std=0.01` 初始化。
+
+3. **消除傅里叶特征的高频混叠**：Base-2 frexp 解构后尾数 $M \in [-1, 1]$ 天然归一化，傅里叶频率初始化为 $10^{[-1, 2]}$ 的对数均匀分布。量级信息由指数嵌入表独立处理。
+
+4. **Fork Bias 零初始化**：`ForkBiasEncoder` 的投影层权重和偏置初始化为零。
+
+5. **嵌入层独立归一化 (Embedding LayerNorm)**：`GlobalTransformer.emb_norm`（`nn.LayerNorm(d_model)`）在传入 `TransformerEncoder` 前截断残差流初始的方差膨胀。Transformer 输出后还有 `out_norm = nn.LayerNorm(d_model)` 稳定解码头的输入分布。
+
+6. **全局梯度范数裁剪 (Gradient Clipping)**：`clip_grad_norm_(max_norm=1.0)`，防止极端样本导致单步梯度爆炸。裁剪后的梯度范数记录至 TensorBoard (`grad_norm`)。
+
+### 8.4 工程化配置
+
+1. **混合精度训练 (BF16 AMP)**：使用 `torch.amp.autocast('cuda', dtype=torch.bfloat16)`。BFloat16 保留了与 FP32 相同的指数位，不存在下溢问题，因此 `GradScaler` 被禁用（`enabled=False`）。
+
+2. **多维指标监控与诊断**：TensorBoard 记录训练动态（batch_loss, epoch_avg_loss, lr, grad_norm, GPU 显存/峰值）。每个 epoch 末展示诊断样例：按 group_ids 分行显示叶子节点，分类型展示预测值与真实值的对比（数值显示绝对/相对误差，布尔显示 logit，文本显示余弦相似度）。阶段完结后自动绘制跨阶段 Loss 曲线图像。
+
+3. **完全可复现的断点续训 (Deterministic Resume)**：每个 checkpoint 完整保存：model state_dict、optimizer state_dict、scheduler state_dict、scaler state_dict、当前 epoch/global_step、best_loss、随机数生成器状态（Python/PyTorch/CUDA）。支持 `--resume <checkpoint.pth>` 精确恢复。支持 `--warm-restart` 只加载模型权重，重新初始化 optimizer/scheduler。
+
+4. **评估集成**：每个 epoch 末调用 `evaluate()` 在 train/test 集上计算指标（Matbench 用 MAE，Tabular 用 RMSE），记录至 TensorBoard 并打印 gap 分析。
+
+---
+
+## 九、评估与推理
+
+### 9.1 评估模块 (`eval.py`)
+
+```python
+def evaluate(model, test_loader, device, metric="mae"):
+    """
+    在 test set 上评估模型。
+    支持指标：mae (Mean Absolute Error), rmse (Root Mean Squared Error)。
+    集成零值分类头：logit > 0 → 直接输出 0。
+    """
+```
+
+### 9.2 推理入口 (`inference.py`)
+
+```python
+def predict(model, frozen_lm, doc, device, root_name="doc"):
+    """
+    对一个 JSON 文档执行推理，返回所有 [MASK] 位置的预测结果。
+    1. JSONParser 解析文档
+    2. 构建 padding_mask 和 fork_bias
+    3. 前向推理
+    4. 提取掩码位置的预测值
+    """
+```
+
+支持参数：
+- `--checkpoint <path>`: 指定权重路径
+- `--model-size`: 模型预设（small/medium/large/xl）
+- 若未指定 checkpoint，自动查找 `checkpoints/` 下最新的 `.pth` 文件
+
+内置 3 个 Demo：
+1. 单材料 band_gap 预测
+2. 数学关系预测 (3 + 7 = ?)
+3. In-Context 推理 (推断隐含规则 y=2x)
+
 
