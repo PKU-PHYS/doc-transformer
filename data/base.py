@@ -52,10 +52,15 @@ def compute_fork_bias_indices(path_ids: torch.Tensor,
 
     first_diff = effective_match.long().argmin(dim=-1)
 
-    fork_is_group = is_group.unsqueeze(2).expand(B, T, T, D)
-    fork_level = fork_is_group.gather(3, first_diff.unsqueeze(-1)).squeeze(-1)
+    # 累计 group 计数:cumsum 后,位置 k 处的值 = 路径前 k+1 个位置内 group 层级数。
+    # 在 first_diff 处 gather 即可得到"第 N 层 group 分叉"的真实层级 N。
+    group_count = is_group.cumsum(dim=-1)
+    group_count_pairs = group_count.unsqueeze(2).expand(B, T, T, D)
+    fork_level = group_count_pairs.gather(3, first_diff.unsqueeze(-1)).squeeze(-1)
 
-    diverged_at_group = fork_is_group.gather(3, first_diff.unsqueeze(-1)).squeeze(-1).bool()
+    # 仅当 first_diff 落在 group 位置时才赋非零 bias;dict-key 分叉(同 instance 内不同字段)保持 0。
+    is_group_pairs = is_group.unsqueeze(2).expand(B, T, T, D)
+    diverged_at_group = is_group_pairs.gather(3, first_diff.unsqueeze(-1)).squeeze(-1).bool()
 
     return torch.where(~all_match & diverged_at_group, fork_level,
                        torch.zeros_like(fork_level))

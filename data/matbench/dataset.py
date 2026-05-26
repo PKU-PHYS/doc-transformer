@@ -148,11 +148,15 @@ class MatbenchDataset(Dataset):
         size_mb = cache_path.stat().st_size / 1024 / 1024
         print(f"    💾 Cached: {cache_path.name} ({size_mb:.1f} MB)")
 
+    # fork_bias 语义版本:v2 起 fork_level 表示累计 group 层级(原 v1 退化为 {0,1})。
+    # 改动此值会让旧缓存自然失效,避免误用历史 pkl。
+    _FORK_BIAS_VERSION = 2
+
     def _cache_path(self, cache_tag: str):
         if not cache_tag:
             return None
         cache_dir = pathlib.Path(__file__).parent / "cache"
-        return cache_dir / f"{cache_tag}_t{self.max_tokens}_parsed.pkl"
+        return cache_dir / f"{cache_tag}_t{self.max_tokens}_fbv{self._FORK_BIAS_VERSION}_parsed.pkl"
 
     def __len__(self):
         return len(self._all_leaves)
