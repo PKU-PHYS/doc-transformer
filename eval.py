@@ -24,7 +24,7 @@ def evaluate(model, test_loader, device, metric="mae"):
     Returns:
         float: 评估指标值
     """
-    was_training = model.training  # 记录入场模式，退出时还原（见 BUGS.md #15）
+    was_training = model.training  # 记录入场模式，退出时还原
     model.eval()
 
     errors = []

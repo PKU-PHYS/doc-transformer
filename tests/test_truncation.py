@@ -1,4 +1,4 @@
-"""文档截断保护 target leaf 测试 — 覆盖 BUGS.md #6。
+"""文档截断保护 target leaf 测试。
 
 回归点:structure_to_json 把 target 放在最后一个 key,朴素截断必砍掉它。
 截断逻辑应把超窗口的 target leaf 挪到 leaves[max_tokens-1] 并保留其值;

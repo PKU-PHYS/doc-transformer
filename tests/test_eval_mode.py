@@ -1,4 +1,4 @@
-"""evaluate() 训练模式还原测试 — 覆盖 BUGS.md #15。
+"""evaluate() 训练模式还原测试。
 
 回归点:evaluate() 退出时应还原入场时的 training 模式,而非无条件 model.train()。
 否则在 inference 脚本里调 evaluate() 会被意外切回 train 模式(带 dropout)。

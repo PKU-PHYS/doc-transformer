@@ -1,4 +1,4 @@
-"""JSONParser 边界用例测试 — 覆盖 BUGS.md #12 及解析基本契约。
+"""JSONParser 边界用例测试 — 覆盖解析基本契约。
 
 回归点:numpy 标量(np.float32/np.int64/np.bool_)必须被识别为 number/boolean,
 而不是落入 else 分支被 str() 当字符串编码。

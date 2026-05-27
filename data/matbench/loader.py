@@ -788,7 +788,7 @@ class MatbenchLoader:
                   f"({100*n_ewald/len(docs):.1f}%)")
 
         # ── Train/Test split ──
-        # ⚠️ BUGS.md #2(待修):此处用 sklearn.train_test_split 做 random split,
+        # ⚠️ 待修:此处用 sklearn.train_test_split 做 random split,
         # 不是 Matbench 官方 5-fold 协议(MatbenchBenchmark)。train.py 同时把
         # 这个 test_docs 当 validation 用于早停(train.py:436-444),validation
         # 信息已"泄漏"给了模型选择,所以 leaderboard 数字(如 0.188 eV)不能

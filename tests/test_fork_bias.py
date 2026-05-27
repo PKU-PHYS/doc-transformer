@@ -1,4 +1,4 @@
-"""Fork bias 层级测试 — 覆盖 BUGS.md #1。
+"""Fork bias 层级测试。
 
 回归点:fork_level 必须由累计 group 计数(cumsum)得到,而非直接取 is_group(0/1)。
 修复前同一 material 内不同 site(应为 level 2)与不同 material(level 1)会压成同值。

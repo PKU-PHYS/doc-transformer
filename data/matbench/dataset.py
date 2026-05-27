@@ -75,11 +75,11 @@ class MatbenchDataset(Dataset):
             )
 
             # 截断前先定位 target leaf(structure_to_json 把 target 放在最后一个 key,
-            # 朴素截断必砍掉它,见 BUGS.md #6)
+            # 朴素截断必砍掉它)
             orig_target_idx = -1
             for j, leaf in enumerate(leaves):
                 # target 一定在根级: path == ["crystal", target_key],长度为 2。
-                # 加深度约束跳过任何同名嵌套字段,避免取错位置(见 BUGS.md #11)。
+                # 加深度约束跳过任何同名嵌套字段,避免取错位置。
                 if len(leaf.path) == 2 and leaf.path[-1] == target_key:
                     orig_target_idx = j
                     break
