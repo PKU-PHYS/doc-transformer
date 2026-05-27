@@ -135,10 +135,27 @@ _OPTION_CACHE_TAGS = {
 }
 
 
+# stats 类选项依赖的 base 选项 (option_key → 必需的 base option_key)
+# 单传 stats 而不开 base 时，structure_to_json 里整块逻辑会被跳过 → 静默 no-op
+_OPTION_DEPENDENCIES = {
+    "add_comp_ewald_stats": "add_comp_ewald",
+    "add_comp_nn_stats": "add_comp_nn",
+}
+
+
 def register_args(parser):
     """在 argparse parser 上注册 Matbench 特有的 CLI 参数。"""
     for flag, kwargs, _ in _MATBENCH_OPTIONS:
         parser.add_argument(flag, **kwargs)
+
+
+def validate_args(args, parser):
+    """校验 stats 类选项必须伴随其 base 选项，不满足则 parser.error 退出。"""
+    for option_key, required_key in _OPTION_DEPENDENCIES.items():
+        if getattr(args, option_key, False) and not getattr(args, required_key, False):
+            flag = "--" + option_key.replace("_", "-")
+            required_flag = "--" + required_key.replace("_", "-")
+            parser.error(f"{flag} requires {required_flag}")
 
 
 def build_dataset_options(args, mb_config: MatbenchTaskConfig) -> dict:

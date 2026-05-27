@@ -45,7 +45,8 @@ def evaluate(model, test_loader, device, metric="mae"):
             with torch.amp.autocast('cuda', dtype=torch.bfloat16,
                                     enabled=(device == "cuda" and torch.cuda.is_bf16_supported())):
                 out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
-            torch.cuda.synchronize()
+            if device == "cuda":
+                torch.cuda.synchronize()
             t_fwd += time.time() - t1
 
             t2 = time.time()

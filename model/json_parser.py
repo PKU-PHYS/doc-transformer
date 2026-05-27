@@ -2,6 +2,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, List
 
+import numpy as np
+
 
 _KEY_HASH_OFFSET = 1_000_000
 _KEY_HASH_MODULUS = (1 << 63) - _KEY_HASH_OFFSET - 1
@@ -35,12 +37,14 @@ class JSONParser:
         与旧版的核心区别：遍历数组时，为每个元素在 path 中插入一个
         实例节点（text=父数组字段名, type=1, id=自增ID），用于 fork bias 检测。
         """
-        if isinstance(data, bool):
-            return [LeafNode(value=data, value_type="boolean", path=current_path,
+        if isinstance(data, (bool, np.bool_)):
+            return [LeafNode(value=bool(data), value_type="boolean", path=current_path,
                              path_types=current_path_types, path_ids=current_path_ids,
                              group_ids=current_groups)]
-        elif isinstance(data, (int, float)):
-            return [LeafNode(value=data, value_type="number", path=current_path,
+        elif isinstance(data, (int, float, np.integer, np.floating)):
+            # 统一转 Python 原生类型，避免 numpy 标量落入磁盘缓存
+            return [LeafNode(value=float(data) if isinstance(data, (float, np.floating)) else int(data),
+                             value_type="number", path=current_path,
                              path_types=current_path_types, path_ids=current_path_ids,
                              group_ids=current_groups)]
         elif isinstance(data, str):

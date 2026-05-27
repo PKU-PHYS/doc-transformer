@@ -526,11 +526,15 @@ def main():
                         choices=list(MODEL_PRESETS.keys()),
                         help=f"Model size preset ({', '.join(MODEL_PRESETS.keys())})")
     # Matbench 特有选项（由 data.matbench.configs 模块管理）
-    from data.matbench.configs import register_args as register_matbench_args
+    from data.matbench.configs import (
+        register_args as register_matbench_args,
+        validate_args as validate_matbench_args,
+    )
     register_matbench_args(parser)
     parser.add_argument("--warm-restart", action="store_true", default=False,
                         help="With --resume: only load model weights, discard optimizer/scheduler/RNG")
     args = parser.parse_args()
+    validate_matbench_args(args, parser)
 
     set_seed(SEED)
 
