@@ -1,5 +1,10 @@
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, List
+
+
+_KEY_HASH_OFFSET = 1_000_000
+_KEY_HASH_MODULUS = (1 << 63) - _KEY_HASH_OFFSET - 1
 
 @dataclass
 class LeafNode:
@@ -18,7 +23,8 @@ class JSONParser:
     @staticmethod
     def _key_hash(key: str) -> int:
         """对 dict key 生成稳定整数 ID，加偏移避免与自增 instance ID 冲突"""
-        return (hash(key) & 0x7FFFFFFF) + 1_000_000
+        digest = hashlib.blake2b(str(key).encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(digest, "big") % _KEY_HASH_MODULUS + _KEY_HASH_OFFSET
         
     def parse(self, data: Any, current_path: List[str],
               current_path_types: List[int], current_path_ids: List[int],

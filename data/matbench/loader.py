@@ -8,7 +8,8 @@ Matbench 数据加载器 — 将 pymatgen Structure 转为嵌套 JSON。
   4. (可选) 添加最近邻距离信息
 """
 
-import math
+import hashlib
+import json
 import random
 import warnings
 import numpy as np
@@ -561,29 +562,68 @@ def _compute_mean_bonds(structure, cutoff_factor: float = 1.3) -> List[dict]:
     return result
 
 
+def _stable_sample_rng(sites: List[dict], max_n: int) -> random.Random:
+    """从站点内容派生确定性 RNG，避免依赖进程级 random 状态。"""
+    payload = json.dumps(
+        {"max_n": max_n, "sites": sites},
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.blake2b(payload.encode("utf-8"), digest_size=8).digest()
+    return random.Random(int.from_bytes(digest, "big"))
+
+
 def _stratified_sample(sites: List[dict], max_n: int) -> List[dict]:
-    """按元素类型分层采样，保持化学组成比例。"""
+    """按元素类型分层采样，保持化学组成比例且结果可复现。"""
+    if max_n <= 0:
+        return []
+    if len(sites) <= max_n:
+        return list(sites)
+
     # 按元素分组
     by_element: Dict[str, List[dict]] = {}
     for s in sites:
         by_element.setdefault(s["element"], []).append(s)
 
-    total = len(sites)
-    sampled = []
+    rng = _stable_sample_rng(sites, max_n)
+    elements = sorted(by_element)
 
-    for elem, group in by_element.items():
-        # 按比例分配名额，至少保留 1 个
-        quota = max(1, round(len(group) / total * max_n))
-        if len(group) <= quota:
-            sampled.extend(group)
+    # 元素种类比预算还多时，不再按插入顺序硬截，改为确定性随机抽元素。
+    if len(elements) > max_n:
+        selected_elements = set(rng.sample(elements, max_n))
+        quotas = {elem: 1 for elem in elements if elem in selected_elements}
+    else:
+        total = len(sites)
+        quotas = {elem: 1 for elem in elements}
+        remaining = max_n - len(elements)
+        ideal_quota = {
+            elem: len(by_element[elem]) / total * max_n
+            for elem in elements
+        }
+
+        # 逐个名额补给"当前配额低于理想比例最多"的元素,同时尊重每组容量。
+        while remaining > 0:
+            candidates = [
+                elem for elem in elements
+                if quotas[elem] < len(by_element[elem])
+            ]
+            if not candidates:
+                break
+            elem = max(candidates, key=lambda e: (ideal_quota[e] - quotas[e], e))
+            quotas[elem] += 1
+            remaining -= 1
+
+    selected_indices = set()
+    for elem, quota in quotas.items():
+        indices = [i for i, site in enumerate(sites) if site["element"] == elem]
+        if len(indices) <= quota:
+            chosen_indices = indices
         else:
-            sampled.extend(random.sample(group, quota))
+            chosen_indices = rng.sample(indices, quota)
+        selected_indices.update(chosen_indices)
 
-    # 微调到恰好 max_n
-    if len(sampled) > max_n:
-        sampled = sampled[:max_n]
-
-    return sampled
+    return [site for i, site in enumerate(sites) if i in selected_indices]
 
 
 # ═══════════════════════════════════════════════════════════════
