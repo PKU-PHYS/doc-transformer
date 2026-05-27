@@ -78,7 +78,9 @@ class MatbenchDataset(Dataset):
             # 朴素截断必砍掉它,见 BUGS.md #6)
             orig_target_idx = -1
             for j, leaf in enumerate(leaves):
-                if leaf.path and leaf.path[-1] == target_key:
+                # target 一定在根级: path == ["crystal", target_key],长度为 2。
+                # 加深度约束跳过任何同名嵌套字段,避免取错位置(见 BUGS.md #11)。
+                if len(leaf.path) == 2 and leaf.path[-1] == target_key:
                     orig_target_idx = j
                     break
 
