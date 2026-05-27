@@ -74,21 +74,37 @@ class MatbenchDataset(Dataset):
                 doc, ["crystal"], [0], [JSONParser._key_hash("crystal")], []
             )
 
-            # 截断
+            # 截断前先定位 target leaf(structure_to_json 把 target 放在最后一个 key,
+            # 朴素截断必砍掉它,见 BUGS.md #6)
+            orig_target_idx = -1
+            for j, leaf in enumerate(leaves):
+                if leaf.path and leaf.path[-1] == target_key:
+                    orig_target_idx = j
+                    break
+
+            # 截断:保护 target leaf 不被砍掉
             if len(leaves) > max_tokens:
                 warnings.warn(
                     f"Document {i} has {len(leaves)} tokens, exceeding "
-                    f"max_tokens={max_tokens}. Truncating to {max_tokens}.",
+                    f"max_tokens={max_tokens}. Truncating to {max_tokens} "
+                    f"(target leaf preserved if present).",
                     stacklevel=2,
                 )
-                leaves = leaves[:max_tokens]
-
-            # 找 target 叶子索引
-            target_idx = -1
-            for j, leaf in enumerate(leaves):
-                if leaf.path and leaf.path[-1] == target_key:
-                    target_idx = j
-                    break
+                if orig_target_idx < 0:
+                    # doc 本身没有 target,普通截断
+                    leaves = leaves[:max_tokens]
+                    target_idx = -1
+                elif orig_target_idx < max_tokens:
+                    # target 落在窗口内,普通截断已不会丢它
+                    leaves = leaves[:max_tokens]
+                    target_idx = orig_target_idx
+                else:
+                    # target 落在窗口外:取前 max_tokens-1 个其他叶子,把 target 挪到末尾
+                    target_leaf = leaves[orig_target_idx]
+                    leaves = leaves[:max_tokens - 1] + [target_leaf]
+                    target_idx = max_tokens - 1
+            else:
+                target_idx = orig_target_idx
 
             self._all_leaves.append(leaves)
             self._target_indices.append(target_idx)
@@ -98,19 +114,18 @@ class MatbenchDataset(Dataset):
 
         # ── 汇总报告 ──
         n_truncated = sum(1 for leaves in self._all_leaves if len(leaves) >= max_tokens)
-        n_target_lost = sum(1 for t in self._target_indices if t < 0)
+        n_target_missing = sum(1 for t in self._target_indices if t < 0)
         print(f"    ✅ Pre-parsed {len(self._all_leaves)} documents")
         if n_truncated > 0:
             warnings.warn(
                 f"{n_truncated}/{len(self._all_leaves)} documents were truncated "
-                f"to max_tokens={max_tokens}.",
+                f"to max_tokens={max_tokens} (target leaf preserved, other fields dropped).",
                 stacklevel=2,
             )
-        if n_target_lost > 0:
+        if n_target_missing > 0:
             warnings.warn(
-                f"{n_target_lost}/{len(self._all_leaves)} documents lost their "
-                f"target leaf after truncation! These samples will use fallback "
-                f"masking (random numeric field), which corrupts training.",
+                f"{n_target_missing}/{len(self._all_leaves)} documents have no "
+                f"'{target_key}' key — these samples will raise at __getitem__.",
                 stacklevel=2,
             )
 
@@ -148,9 +163,11 @@ class MatbenchDataset(Dataset):
         size_mb = cache_path.stat().st_size / 1024 / 1024
         print(f"    💾 Cached: {cache_path.name} ({size_mb:.1f} MB)")
 
-    # fork_bias 语义版本:v2 起 fork_level 表示累计 group 层级(原 v1 退化为 {0,1})。
+    # fork_bias 语义版本:
+    #   v1 → v2:fork_level 改为累计 group 层级(原退化为 {0,1})
+    #   v2 → v3:截断策略改为"保留 target leaf"(原朴素截断必砍掉 target,BUGS.md #6)
     # 改动此值会让旧缓存自然失效,避免误用历史 pkl。
-    _FORK_BIAS_VERSION = 2
+    _FORK_BIAS_VERSION = 3
 
     def _cache_path(self, cache_tag: str):
         if not cache_tag:
@@ -181,8 +198,9 @@ class MatbenchDataset(Dataset):
         else:
             raise RuntimeError(
                 f"Sample {idx}: target leaf not found (target_idx={target_idx}). "
-                f"This usually means the target was truncated by max_tokens. "
-                f"Check structure_to_json token budget logic."
+                f"This document is missing the '{self.target_key}' key entirely "
+                f"(截断逻辑会保护 target leaf,所以这里不再是截断引起的)。"
+                f"Check the upstream loader (structure_to_json) for documents without targets."
             )
 
         return leaves, target_masks, fork_bias

@@ -160,5 +160,9 @@ class DocumentTransformer(nn.Module):
             losses.append(F.cosine_embedding_loss(preds_t, targets_t, y, reduction='mean'))
             
         if losses:
+            # ⚠️ BUGS.md #14(待修):此处对 num/bool/str 三类 loss 做 unweighted mean,
+            # 不按各类型的样本数加权。matbench 全是数值,只走 numeric loss,问题不显;
+            # 混合列 tabular 任务会出现 "1 条 num + 100 条 str" 等权的不平衡。
+            # 修复方向:按各类型实际样本数加权,或改为对所有 token 做 per-sample 平均。
             return sum(losses) / len(losses) + zero_loss_term
         return torch.tensor(0.0, device=device, requires_grad=True)
