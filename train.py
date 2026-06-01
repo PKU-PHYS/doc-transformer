@@ -271,7 +271,8 @@ def train_stage(
                       weight_decay=train_config.weight_decay, betas=train_config.betas)
     
     # 预估总步数和 Warmup 步数
-    steps_per_epoch = dataset_size // train_config.batch_size
+    # DataLoader 默认 drop_last=False,len(loader) 是 ceil,这里用 ceil 与之对齐,避免末尾 batch 在 LR=0 下空转
+    steps_per_epoch = (dataset_size + train_config.batch_size - 1) // train_config.batch_size
     total_steps = max_epochs * steps_per_epoch
     warmup_steps = min(625, total_steps // 10)  # 固定 1 epoch warmup，不随 max_epochs 膨胀
     
@@ -348,6 +349,7 @@ def train_stage(
             num_workers=0,
         )
 
+    epoch = start_epoch - 1
     for epoch in range(start_epoch, max_epochs):
         epoch_start = time.time()
 

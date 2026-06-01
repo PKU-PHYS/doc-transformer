@@ -27,7 +27,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
                       add_bonds: bool = False,
                       max_bonds: int = 32,
                       add_composition: bool = False,
-                      no_coords: bool = False,
+                      drop_coords: bool = False,
                       add_ewald: bool = False,
                       add_element_props: bool = False,
                       add_comp_ewald: bool = False,
@@ -53,7 +53,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         add_bonds:  是否添加全局 bonds 列表 (去重的原子对 + 距离)
         max_bonds:  最大 bond 数量 (超过则取最短的)
         add_composition: 是否添加元素比例数组 [{element, ratio}]
-        no_coords: 移除 per-site 绝对坐标 (x,y,z)。若 site 还有其他字段 (如 angles) 则保留 sites；
+        drop_coords: 移除 per-site 绝对坐标 (x,y,z)。若 site 还有其他字段 (如 angles) 则保留 sites；
                    若只剩 element 则整个 sites 删除
         add_ewald: 是否添加 per-site Ewald 静电能 (ewald_energy)
         add_element_props: 是否添加 per-element 物理属性 (electronegativity, ionization_energy, electron_affinity)
@@ -70,7 +70,7 @@ def structure_to_json(structure, target_val: Optional[float] = None,
     # 对大结构：bonds 的距离信息密度 > sites 的坐标信息密度
     # 对小结构：两者都能装下，不受影响
     tokens_per_site = 1  # element
-    if not no_coords:
+    if not drop_coords:
         tokens_per_site += 3  # x, y, z
     if add_angles:
         tokens_per_site += 3  # cn, avg_angle, min_angle
@@ -195,8 +195,8 @@ def structure_to_json(structure, target_val: Optional[float] = None,
         doc["nn_min"] = round(float(nn_dists.min()), 4)
         doc["nn_mean"] = round(float(nn_dists.mean()), 4)
 
-    # ── 处理 no_coords：条件性删除绝对坐标 ──
-    if no_coords:
+    # ── 处理 drop_coords：条件性删除绝对坐标 ──
+    if drop_coords:
         for site_dict in sites_data:
             site_dict.pop("x", None)
             site_dict.pop("y", None)
@@ -659,7 +659,7 @@ class MatbenchLoader:
         add_bonds = opts.get("add_bonds", False)
         max_bonds = opts.get("max_bonds", 32)
         add_composition = opts.get("add_composition", False)
-        no_coords = opts.get("no_coords", False)
+        drop_coords = opts.get("drop_coords", False)
         add_ewald = opts.get("add_ewald", False)
         add_element_props = opts.get("add_element_props", False)
         add_comp_ewald = opts.get("add_comp_ewald", False)
@@ -674,7 +674,7 @@ class MatbenchLoader:
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_tokens, add_angles,
                                       add_bonds, max_bonds,
-                                      add_composition, no_coords,
+                                      add_composition, drop_coords,
                                       add_ewald, add_element_props,
                                       add_comp_ewald, add_spacegroup, add_nn_stats,
                                       add_density, add_comp_nn,
@@ -704,8 +704,8 @@ class MatbenchLoader:
             extras.append(f"add_bonds (max={max_bonds})")
         if add_composition:
             extras.append("add_composition")
-        if no_coords:
-            extras.append("no_coords")
+        if drop_coords:
+            extras.append("drop_coords")
         if add_ewald:
             extras.append("add_ewald")
         if add_element_props:
@@ -746,7 +746,7 @@ class MatbenchLoader:
                 add_angles=add_angles,
                 add_bonds=add_bonds, max_bonds=max_bonds,
                 add_composition=add_composition,
-                no_coords=no_coords,
+                drop_coords=drop_coords,
                 add_ewald=add_ewald,
                 add_element_props=add_element_props,
                 add_comp_ewald=add_comp_ewald,
@@ -808,14 +808,14 @@ class MatbenchLoader:
             print(f"  📏 Sites per structure: "
                   f"min={min(n_sites)}, max={max(n_sites)}, "
                   f"mean={np.mean(n_sites):.1f}, median={np.median(n_sites):.0f}")
-        elif no_coords:
+        elif drop_coords:
             print(f"  📏 Sites removed (no per-site extras)")
 
         # ── 保存缓存 ──
         self._save_cache(cache_path)
 
     def _cache_path(self, task_name, max_tokens, add_angles,
-                    add_bonds, max_bonds, add_composition, no_coords,
+                    add_bonds, max_bonds, add_composition, drop_coords,
                     add_ewald, add_element_props, add_comp_ewald,
                     add_spacegroup, add_nn_stats, add_density,
                     add_comp_nn,
@@ -827,7 +827,7 @@ class MatbenchLoader:
         angles_tag = "_angles" if add_angles else ""
         bonds_tag = f"_bonds{max_bonds}" if add_bonds else ""
         comp_tag = "_comp" if add_composition else ""
-        nocoords_tag = "_nocoords" if no_coords else ""
+        dropcoords_tag = "_dropcoords" if drop_coords else ""
         ewald_tag = "_ewald" if add_ewald else ""
         elprops_tag = "_elprops" if add_element_props else ""
         comp_ewald_tag = "_cewald" if add_comp_ewald else ""
@@ -838,7 +838,7 @@ class MatbenchLoader:
         cewalds_tag = "_cewalds" if add_comp_ewald_stats else ""
         cnns_tag = "_cnns" if add_comp_nn_stats else ""
         mbonds_tag = "_mbonds" if add_mean_bonds else ""
-        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{nocoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}_seed{seed}.pkl"
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{dropcoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}_seed{seed}.pkl"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""

@@ -518,7 +518,7 @@ class MatbenchLoader:
 | `add_spacegroup` | `--add-spacegroup` | 空间群编号 + 晶系 |
 | `add_density` | `--add-density` | 密度 + 体积/原子 |
 | `add_nn_stats` | `--add-nn-stats` | 全局最近邻距离统计 (nn_min, nn_mean) |
-| `no_coords` | `--no-coords` | 移除 per-site 绝对坐标 (x,y,z) |
+| `drop_coords` | `--drop-coords` | 移除 per-site 绝对坐标 (x,y,z) |
 | `add_comp_ewald_stats` | `--add-comp-ewald-stats` | per-element Ewald std/min/max |
 | `add_comp_nn_stats` | `--add-comp-nn-stats` | per-element NN distance std/min/max |
 | `add_mean_bonds` | `--add-mean-bonds` | per-element-pair 平均键距 |

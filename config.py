@@ -28,8 +28,8 @@ class ModelConfig:
     
     # ── Loss 尾数空间配置 ──
     # frexp 归一化时指数的 clamp 范围 (控制 scale = 2^E 的上下界)
-    # E_min=0 → scale≥1，避免小值/零值梯度被放大
-    # E_max=4 → scale≤16，适度归一化大值 (覆盖 ~0 到 ~16 的 target)
+    # 默认 min=max=0 → scale 恒为 1,等价关闭尾数归一化(loss 退化为 Huber on arcsinh)
+    # 如需启用:E_min=0 → scale≥1 防小值/零值梯度被放大;E_max=4 → scale≤16 适度归一化大值
     loss_exponent_min: int = 0
     loss_exponent_max: int = 0
     # 量级补偿指数: loss *= scale^k

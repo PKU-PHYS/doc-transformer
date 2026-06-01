@@ -60,67 +60,76 @@ class MatbenchDataset(Dataset):
             self._all_leaves = cached["all_leaves"]
             self._target_indices = cached["target_indices"]
             self._all_fork_bias = cached["all_fork_bias"]
+            self._n_truncated = cached["n_truncated"]
             print(f"    ✅ {len(self._all_leaves)} samples loaded from cache")
-            return
+        else:
+            # ── 预解析所有文档 ──
+            print(f"    ⏳ Pre-parsing {len(docs)} documents...")
+            self._all_leaves = []
+            self._target_indices = []
+            self._n_truncated = 0
 
-        # ── 预解析所有文档 ──
-        print(f"    ⏳ Pre-parsing {len(docs)} documents...")
-        self._all_leaves = []
-        self._target_indices = []
-
-        for i, doc in enumerate(docs):
-            parser = JSONParser()
-            leaves = parser.parse(
-                doc, ["crystal"], [0], [JSONParser._key_hash("crystal")], []
-            )
-
-            # 截断前先定位 target leaf(structure_to_json 把 target 放在最后一个 key,
-            # 朴素截断必砍掉它)
-            orig_target_idx = -1
-            for j, leaf in enumerate(leaves):
-                # target 一定在根级: path == ["crystal", target_key],长度为 2。
-                # 加深度约束跳过任何同名嵌套字段,避免取错位置。
-                if len(leaf.path) == 2 and leaf.path[-1] == target_key:
-                    orig_target_idx = j
-                    break
-
-            # 截断:保护 target leaf 不被砍掉
-            if len(leaves) > max_tokens:
-                warnings.warn(
-                    f"Document {i} has {len(leaves)} tokens, exceeding "
-                    f"max_tokens={max_tokens}. Truncating to {max_tokens} "
-                    f"(target leaf preserved if present).",
-                    stacklevel=2,
+            for i, doc in enumerate(docs):
+                parser = JSONParser()
+                leaves = parser.parse(
+                    doc, ["crystal"], [0], [JSONParser._key_hash("crystal")], []
                 )
-                if orig_target_idx < 0:
-                    # doc 本身没有 target,普通截断
-                    leaves = leaves[:max_tokens]
-                    target_idx = -1
-                elif orig_target_idx < max_tokens:
-                    # target 落在窗口内,普通截断已不会丢它
-                    leaves = leaves[:max_tokens]
-                    target_idx = orig_target_idx
+
+                # 截断前先定位 target leaf(structure_to_json 把 target 放在最后一个 key,
+                # 朴素截断必砍掉它)
+                orig_target_idx = -1
+                for j, leaf in enumerate(leaves):
+                    # target 一定在根级: path == ["crystal", target_key],长度为 2。
+                    # 加深度约束跳过任何同名嵌套字段,避免取错位置。
+                    if len(leaf.path) == 2 and leaf.path[-1] == target_key:
+                        orig_target_idx = j
+                        break
+
+                # 截断:保护 target leaf 不被砍掉
+                if len(leaves) > max_tokens:
+                    self._n_truncated += 1
+                    warnings.warn(
+                        f"Document {i} has {len(leaves)} tokens, exceeding "
+                        f"max_tokens={max_tokens}. Truncating to {max_tokens} "
+                        f"(target leaf preserved if present).",
+                        stacklevel=2,
+                    )
+                    if orig_target_idx < 0:
+                        # doc 本身没有 target,普通截断
+                        leaves = leaves[:max_tokens]
+                        target_idx = -1
+                    elif orig_target_idx < max_tokens:
+                        # target 落在窗口内,普通截断已不会丢它
+                        leaves = leaves[:max_tokens]
+                        target_idx = orig_target_idx
+                    else:
+                        # target 落在窗口外:取前 max_tokens-1 个其他叶子,把 target 挪到末尾
+                        target_leaf = leaves[orig_target_idx]
+                        leaves = leaves[:max_tokens - 1] + [target_leaf]
+                        target_idx = max_tokens - 1
                 else:
-                    # target 落在窗口外:取前 max_tokens-1 个其他叶子,把 target 挪到末尾
-                    target_leaf = leaves[orig_target_idx]
-                    leaves = leaves[:max_tokens - 1] + [target_leaf]
-                    target_idx = max_tokens - 1
-            else:
-                target_idx = orig_target_idx
+                    target_idx = orig_target_idx
 
-            self._all_leaves.append(leaves)
-            self._target_indices.append(target_idx)
+                self._all_leaves.append(leaves)
+                self._target_indices.append(target_idx)
 
-            if (i + 1) % 10000 == 0:
-                print(f"      ... {i+1}/{len(docs)} parsed")
+                if (i + 1) % 10000 == 0:
+                    print(f"      ... {i+1}/{len(docs)} parsed")
 
-        # ── 汇总报告 ──
-        n_truncated = sum(1 for leaves in self._all_leaves if len(leaves) >= max_tokens)
+            print(f"    ✅ Pre-parsed {len(self._all_leaves)} documents")
+
+            # ── 预计算 fork_bias ──
+            self._precompute_fork_bias()
+
+            # ── 保存缓存 ──
+            if cache_path:
+                self._save_cache(cache_path)
+
+        # ── 统一汇总报告(cache hit / miss 两条路径均走这里)──
         n_target_missing = sum(1 for t in self._target_indices if t < 0)
-        print(f"    ✅ Pre-parsed {len(self._all_leaves)} documents")
-        if n_truncated > 0:
+        if self._n_truncated > 0:
             warnings.warn(
-                f"{n_truncated}/{len(self._all_leaves)} documents were truncated "
+                f"{self._n_truncated}/{len(self._all_leaves)} documents were truncated "
                 f"to max_tokens={max_tokens} (target leaf preserved, other fields dropped).",
                 stacklevel=2,
             )
@@ -130,13 +139,6 @@ class MatbenchDataset(Dataset):
                 f"'{target_key}' key — these samples will raise at __getitem__.",
                 stacklevel=2,
             )
-
-        # ── 预计算 fork_bias ──
-        self._precompute_fork_bias()
-
-        # ── 保存缓存 ──
-        if cache_path:
-            self._save_cache(cache_path)
 
     def _precompute_fork_bias(self):
         """预计算所有样本的 fork_bias 矩阵，存为 int8 节省内存。"""
@@ -159,6 +161,7 @@ class MatbenchDataset(Dataset):
             "all_leaves": self._all_leaves,
             "target_indices": self._target_indices,
             "all_fork_bias": self._all_fork_bias,
+            "n_truncated": self._n_truncated,
         }
         with open(cache_path, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)

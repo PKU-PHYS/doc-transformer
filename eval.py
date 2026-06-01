@@ -70,6 +70,10 @@ def evaluate(model, test_loader, device, metric="mae"):
                                 errors.append(abs(pred_val - true_float))
                             elif metric == "rmse":
                                 errors.append((pred_val - true_float) ** 2)
+                        else:
+                            raise NotImplementedError(
+                                f"evaluate() only supports number masks; got val_type={val_type!r}"
+                            )
                 t_pred += time.time() - t2
 
                 n_batches += 1

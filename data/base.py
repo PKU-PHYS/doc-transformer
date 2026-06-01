@@ -121,11 +121,17 @@ def collate_fn(batch, max_tokens: int = 512):
     batched_masks = []
     fork_bias_list = []
 
-    # 双重保护:collate 层再做一次截断。
-    # ⚠️ 约定:此处的 max_tokens 必须 >= dataset 的 max_tokens,否则会触发 collate
-    # 二次截断;而 collate 不知道 target_idx 在哪,会破坏 dataset 阶段对 target leaf
-    # 的保护。当前 train.py / eval.py 都用同一个值,约定自然满足。
-    max_len = min(max(len(item[0]) for item in batch), max_tokens)
+    # 约定:此处的 max_tokens 必须 >= dataset 的 max_tokens。
+    # 若 dataset 已按自己的 max_tokens 截断并保护过 target leaf,collate 不应再砍。
+    # 一旦违反约定,会破坏 dataset 阶段对 target leaf 的保护,故显式断言而非静默二次截断。
+    batch_max = max(len(item[0]) for item in batch)
+    if batch_max > max_tokens:
+        raise ValueError(
+            f"collate_fn received leaves of length {batch_max} > max_tokens={max_tokens}. "
+            f"This likely means collate_fn's max_tokens is smaller than the dataset's max_tokens, "
+            f"which would silently break target leaf protection."
+        )
+    max_len = min(batch_max, max_tokens)
     B = len(batch)
 
     padding_mask = torch.ones((B, max_len), dtype=torch.bool)

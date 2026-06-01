@@ -14,10 +14,10 @@ pixi install
 
 ```bash
 pixi run python train.py --dataset matbench_mp_gap
-pixi run python train.py --dataset matbench_dielectric --add-angles --no-coords
+pixi run python train.py --dataset matbench_dielectric --add-angles --drop-coords
 ```
 
-Available options: `--add-angles`, `--add-bonds`, `--add-composition`, `--no-coords`, `--add-ewald`.
+Available options: `--add-angles`, `--add-bonds`, `--add-composition`, `--drop-coords`, `--add-ewald`.
 
 ### Tabular Regression
 

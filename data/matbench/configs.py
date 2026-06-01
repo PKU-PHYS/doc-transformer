@@ -6,6 +6,7 @@ dataset_options 是通用的 dict，可传递给 MatbenchLoader 和 MatbenchData
 不同数据集可定义自己特有的参数。
 """
 
+import argparse
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
@@ -72,46 +73,46 @@ def get_matbench_config(task_name: str) -> MatbenchTaskConfig:
 # Matbench 支持的所有 dataset_options 及其 CLI 映射
 # (cli_flag, cli_kwargs, option_key)
 _MATBENCH_OPTIONS = [
-    ("--add-angles",      {"action": "store_true", "default": False,
+    ("--add-angles",      {"action": argparse.BooleanOptionalAction, "default": None,
                            "help": "[Matbench] Add per-site coordination stats (cn, avg_angle, min_angle)"},
      "add_angles"),
-    ("--add-bonds",       {"action": "store_true", "default": False,
+    ("--add-bonds",       {"action": argparse.BooleanOptionalAction, "default": None,
                            "help": "[Matbench] Add global bonds list (unique atom pairs + distances)"},
      "add_bonds"),
-    ("--add-composition", {"action": "store_true", "default": False,
+    ("--add-composition", {"action": argparse.BooleanOptionalAction, "default": None,
                            "help": "[Matbench] Add element ratio array [{element, ratio}]"},
      "add_composition"),
-    ("--add-ewald",       {"action": "store_true", "default": False,
+    ("--add-ewald",       {"action": argparse.BooleanOptionalAction, "default": None,
                            "help": "[Matbench] Add per-site Ewald electrostatic energy (ewald_energy)"},
      "add_ewald"),
-    ("--add-element-props", {"action": "store_true", "default": False,
+    ("--add-element-props", {"action": argparse.BooleanOptionalAction, "default": None,
                              "help": "[Matbench] Add per-element physical properties (en, ie, ea)"},
      "add_element_props"),
-    ("--add-comp-ewald",   {"action": "store_true", "default": False,
+    ("--add-comp-ewald",   {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add per-element averaged Ewald energy to composition"},
      "add_comp_ewald"),
-    ("--add-spacegroup",   {"action": "store_true", "default": False,
+    ("--add-spacegroup",   {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add space group number and crystal system"},
      "add_spacegroup"),
-    ("--add-density",      {"action": "store_true", "default": False,
+    ("--add-density",      {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add density (g/cm3) and volume per atom (A3/atom)"},
      "add_density"),
-    ("--add-nn-stats",     {"action": "store_true", "default": False,
+    ("--add-nn-stats",     {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add global nearest-neighbor distance stats (nn_min, nn_mean)"},
      "add_nn_stats"),
-    ("--add-comp-nn",      {"action": "store_true", "default": False,
+    ("--add-comp-nn",      {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add per-element averaged nearest-neighbor distance to composition"},
      "add_comp_nn"),
-    ("--no-coords",       {"action": "store_true", "default": False,
+    ("--drop-coords",     {"action": argparse.BooleanOptionalAction, "default": None,
                            "help": "[Matbench] Remove per-site absolute coords (x,y,z); keep sites if angles present"},
-     "no_coords"),
-    ("--add-comp-ewald-stats", {"action": "store_true", "default": False,
+     "drop_coords"),
+    ("--add-comp-ewald-stats", {"action": argparse.BooleanOptionalAction, "default": None,
                                 "help": "[Matbench] Add per-element Ewald std/min/max to composition (requires --add-comp-ewald)"},
      "add_comp_ewald_stats"),
-    ("--add-comp-nn-stats",    {"action": "store_true", "default": False,
+    ("--add-comp-nn-stats",    {"action": argparse.BooleanOptionalAction, "default": None,
                                 "help": "[Matbench] Add per-element NN distance std/min/max to composition (requires --add-comp-nn)"},
      "add_comp_nn_stats"),
-    ("--add-mean-bonds",   {"action": "store_true", "default": False,
+    ("--add-mean-bonds",   {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add per-element-pair mean bond distance (bonds_stats)"},
      "add_mean_bonds"),
 ]
@@ -128,7 +129,7 @@ _OPTION_CACHE_TAGS = {
     "add_density": "_dens",
     "add_nn_stats": "_nn",
     "add_comp_nn": "_cnn",
-    "no_coords": "_nocoords",
+    "drop_coords": "_dropcoords",
     "add_comp_ewald_stats": "_cewalds",
     "add_comp_nn_stats": "_cnns",
     "add_mean_bonds": "_mbonds",
@@ -159,12 +160,15 @@ def validate_args(args, parser):
 
 
 def build_dataset_options(args, mb_config: MatbenchTaskConfig) -> dict:
-    """将 CLI 参数与配方默认值合并为 dataset_options dict。"""
+    """将 CLI 参数与配方默认值合并为 dataset_options dict。
+
+    CLI 三态语义:不传 → None → 沿用 task default;`--X` → True;`--no-X` → False(覆盖)。
+    """
     opts = dict(mb_config.dataset_options)
     for _, _, option_key in _MATBENCH_OPTIONS:
-        attr_name = option_key  # argparse 把 '-' 转为 '_'
-        if getattr(args, attr_name, False):
-            opts[option_key] = True
+        val = getattr(args, option_key, None)
+        if val is not None:
+            opts[option_key] = val
     return opts
 
 
