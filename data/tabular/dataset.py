@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Tuple
 from torch.utils.data import Dataset
 from model.json_parser import LeafNode, JSONParser
 from data.tabular.loader import TableLoader
-from data.base import compute_single_fork_bias
+from data.base import compute_single_structural_bias
 
 
 class TabularDataset(Dataset):
@@ -67,8 +67,8 @@ class TabularDataset(Dataset):
             if col_name == target_col:
                 self._target_leaf_by_row[row_pos] = i
 
-        # ── 预计算 fork_bias（所有样本路径相同，只需算一次）──
-        self._fork_bias = compute_single_fork_bias(self._template_leaves)
+        # ── 预计算 structural_bias（所有样本路径相同，只需算一次）──
+        self._structural_bias = compute_single_structural_bias(self._template_leaves)
 
     def __len__(self):
         return self.loader.n_rows
@@ -127,4 +127,4 @@ class TabularDataset(Dataset):
                 f"Check template structure and target_col='{self.loader.target_col}'."
             )
 
-        return leaves, target_masks, self._fork_bias
+        return leaves, target_masks, self._structural_bias

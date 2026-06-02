@@ -32,7 +32,7 @@ class _DummyModel(nn.Module):
         self.decode_head = _DummyHead()
         self.config = _DummyConfig()
 
-    def forward(self, batched_leaves, padding_mask, fork_bias_indices=None):
+    def forward(self, batched_leaves, padding_mask, bias_indices=None):
         return torch.zeros(len(batched_leaves), 4, 2)
 
 
@@ -40,8 +40,12 @@ def _make_loader():
     batched_leaves = [[0]]                       # 1 个样本
     batched_masks = [{0: (1.0, "number")}]       # mask 在位置 0
     padding_mask = torch.zeros(1, 4, dtype=torch.bool)
-    fork_bias = torch.zeros(1, 4, 4, dtype=torch.long)
-    return [(batched_leaves, batched_masks, padding_mask, fork_bias)]
+    bias_indices = {
+        "is_group_fork": torch.zeros(1, 4, 4, dtype=torch.long),
+        "first_diff": torch.zeros(1, 4, 4, dtype=torch.long),
+        "tree_dist": torch.zeros(1, 4, 4, dtype=torch.long),
+    }
+    return [(batched_leaves, batched_masks, padding_mask, bias_indices)]
 
 
 class EvalModeRestoreTests(unittest.TestCase):

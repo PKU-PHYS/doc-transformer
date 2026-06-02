@@ -329,7 +329,7 @@ def train_stage(
         "reason": "",
     }
 
-    # num_workers=0：预计算 fork_bias 后 collate 极轻量（pad+stack），
+    # num_workers=0：预计算 structural_bias 后 collate 极轻量（pad+stack），
     # 多进程 fork 反而因 COW 复制预解析数据集（数百万 Python 对象）而严重拖慢启动
     loader = DataLoader(
         dataset,
@@ -357,14 +357,14 @@ def train_stage(
         epoch_loss = 0.0
         n_batches = 0
 
-        for batch_idx, (batched_leaves, batched_masks, padding_mask, fork_bias_indices) in enumerate(loader):
+        for batch_idx, (batched_leaves, batched_masks, padding_mask, bias_indices) in enumerate(loader):
             padding_mask = padding_mask.to(device)
-            fork_bias_indices = fork_bias_indices.to(device)
+            bias_indices = {k: v.to(device) for k, v in bias_indices.items()}
 
             optimizer.zero_grad()
             
             with torch.amp.autocast('cuda', dtype=amp_dtype, enabled=use_amp):
-                out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
+                out = model(batched_leaves, padding_mask, bias_indices=bias_indices)
                 loss = model.compute_loss(out, batched_leaves, batched_masks)
 
             scaler.scale(loss).backward()

@@ -14,8 +14,8 @@ class ModelConfig:
     frozen_lm_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     frozen_lm_dim: int = 384    
     
-    # Fork Bias 编码维度 (正弦编码 → 可学习投影)
-    fork_bias_encoding_dim: int = 32
+    # Structural Bias 编码维度 (正弦编码 → 可学习投影)
+    bias_encoding_dim: int = 32
     
     # 傅里叶特征 (数值编码用)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128

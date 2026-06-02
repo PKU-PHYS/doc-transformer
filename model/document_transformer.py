@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 from config import ModelConfig
 from .json_parser import LeafNode
@@ -24,11 +24,11 @@ class DocumentTransformer(nn.Module):
     def forward(self, 
                 batched_leaves: List[List[LeafNode]], 
                 padding_mask: Tensor,
-                fork_bias_indices: Tensor = None) -> Tensor:
+                bias_indices: Optional[Dict[str, Tensor]] = None) -> Tensor:
         """
         batched_leaves: batch 中每个样本的叶子节点列表
         padding_mask: (B, max_len)
-        fork_bias_indices: (B, max_len, max_len) fork level 矩阵
+        bias_indices: Dict[str, Tensor]，每个 value 为 (B, max_len, max_len) 的结构关系信号
         """
         B = len(batched_leaves)
         device = padding_mask.device
@@ -56,7 +56,7 @@ class DocumentTransformer(nn.Module):
                 
         # Transformer 主干在外层 autocast 下运行
         out = self.transformer(x_emb, padding_mask=padding_mask,
-                               fork_bias_indices=fork_bias_indices)
+                               bias_indices=bias_indices)
         return out
         
     def compute_loss(self, 

@@ -37,16 +37,16 @@ def evaluate(model, test_loader, device, metric="mae"):
     try:
         t0 = time.time()
         with torch.no_grad():
-            for batched_leaves, batched_masks, padding_mask, fork_bias_indices in test_loader:
+            for batched_leaves, batched_masks, padding_mask, bias_indices in test_loader:
                 t_data += time.time() - t0
 
                 t1 = time.time()
                 padding_mask = padding_mask.to(device)
-                fork_bias_indices = fork_bias_indices.to(device)
+                bias_indices = {k: v.to(device) for k, v in bias_indices.items()}
 
                 with torch.amp.autocast('cuda', dtype=torch.bfloat16,
                                         enabled=(device == "cuda" and torch.cuda.is_bf16_supported())):
-                    out = model(batched_leaves, padding_mask, fork_bias_indices=fork_bias_indices)
+                    out = model(batched_leaves, padding_mask, bias_indices=bias_indices)
                 if device == "cuda":
                     torch.cuda.synchronize()
                 t_fwd += time.time() - t1

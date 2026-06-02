@@ -1,9 +1,9 @@
 """
-数据管线通用组件 — collate_fn + fork_bias 计算。
+数据管线通用组件 — collate_fn + structural_bias 计算。
 
 这些函数与数据源无关，只处理 LeafNode[] → Tensor 的通用逻辑。
-所有 Dataset 的 __getitem__ 返回 (List[LeafNode], Dict[int, Any], Tensor)，
-其中第三个元素是预计算的 fork_bias 矩阵。
+所有 Dataset 的 __getitem__ 返回 (List[LeafNode], Dict[int, Any], Dict[str, Tensor])，
+其中第三个元素是预计算的 structural_bias 字典。
 """
 
 import torch
@@ -12,19 +12,19 @@ from model.json_parser import LeafNode
 
 
 # ═══════════════════════════════════════════════════════════════
-# §1  Fork Bias 计算
+# §1  Structural Bias 计算
 # ═══════════════════════════════════════════════════════════════
 
-def compute_fork_bias_indices(path_ids: torch.Tensor,
-                              is_group: torch.Tensor,
-                              valid_path_lens: torch.Tensor) -> torch.Tensor:
+def compute_structural_bias_indices(path_ids: torch.Tensor,
+                                    is_group: torch.Tensor,
+                                    valid_path_lens: torch.Tensor) -> Dict[str, torch.Tensor]:
     """
-    计算 fork bias 矩阵：衡量两个叶子在 JSON 树中的结构距离。
+    计算三个结构关系信号，衡量两个叶子在 JSON 树中的拓扑关系。
 
     对于每对叶子 (i, j)：
-      - 找到它们路径 ID 首次不同的层级 k（fork point）
-      - 如果 fork 发生在 group 层级（数组），编码为 k
-      - 如果完全相同或没有 group 层级的分叉，编码为 0
+      - is_group_fork: 分叉点是否在 group（数组 instance）层
+      - first_diff:    路径首次不同的位置索引（共同前缀长度）
+      - tree_dist:     两叶子到 LCA 的步数之和
 
     Args:
         path_ids:        (B, T, D) 每个叶子的路径 ID 序列
@@ -32,7 +32,10 @@ def compute_fork_bias_indices(path_ids: torch.Tensor,
         valid_path_lens: (B, T)    每个叶子路径的有效长度
 
     Returns:
-        (B, T, T) fork bias 索引矩阵
+        Dict[str, Tensor]，每个 value 为 (B, T, T) int8:
+          "is_group_fork": 分叉点是否在 group 层（布尔→0/1）
+          "first_diff":    路径首次不同的位置索引
+          "tree_dist":     两叶子到 LCA 的步数之和
     """
     B, T, D = path_ids.shape
 
@@ -50,25 +53,35 @@ def compute_fork_bias_indices(path_ids: torch.Tensor,
 
     all_match = effective_match.all(dim=-1)
 
-    first_diff = effective_match.long().argmin(dim=-1)
+    first_diff_raw = effective_match.long().argmin(dim=-1)
 
-    # 累计 group 计数:cumsum 后,位置 k 处的值 = 路径前 k+1 个位置内 group 层级数。
-    # 在 first_diff 处 gather 即可得到"第 N 层 group 分叉"的真实层级 N。
-    group_count = is_group.cumsum(dim=-1)
-    group_count_pairs = group_count.unsqueeze(2).expand(B, T, T, D)
-    fork_level = group_count_pairs.gather(3, first_diff.unsqueeze(-1)).squeeze(-1)
-
-    # 仅当 first_diff 落在 group 位置时才赋非零 bias;dict-key 分叉(同 instance 内不同字段)保持 0。
+    # ── Bias 1: is_group_fork ──
+    # 分叉点是否在 group 层。对角线/完全匹配 → 0
     is_group_pairs = is_group.unsqueeze(2).expand(B, T, T, D)
-    diverged_at_group = is_group_pairs.gather(3, first_diff.unsqueeze(-1)).squeeze(-1).bool()
+    diverged_at_group = is_group_pairs.gather(3, first_diff_raw.unsqueeze(-1)).squeeze(-1).bool()
+    is_group_fork = (~all_match & diverged_at_group).to(torch.int8)
 
-    return torch.where(~all_match & diverged_at_group, fork_level,
-                       torch.zeros_like(fork_level))
+    # ── Bias 2: first_diff ──
+    # 对角线/完全匹配时 argmin 返回 0，需修正为 min(L_i, L_j)
+    len_i_2d = valid_path_lens.unsqueeze(2)   # (B, T, 1)
+    len_j_2d = valid_path_lens.unsqueeze(1)   # (B, 1, T)
+    min_len = torch.minimum(len_i_2d, len_j_2d)
+    first_diff = torch.where(all_match, min_len, first_diff_raw).to(torch.int8)
+
+    # ── Bias 3: tree_dist ──
+    # tree_dist = (L_i - first_diff) + (L_j - first_diff) = L_i + L_j - 2 * first_diff
+    tree_dist = (len_i_2d + len_j_2d - 2 * first_diff.long()).to(torch.int8)
+
+    return {
+        "is_group_fork": is_group_fork,
+        "first_diff": first_diff,
+        "tree_dist": tree_dist,
+    }
 
 
-def compute_single_fork_bias(leaves: List[LeafNode]) -> torch.Tensor:
+def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Tensor]:
     """
-    计算单个样本的 fork bias 矩阵。
+    计算单个样本的 structural bias 字典。
 
     由于每个样本的路径在训练过程中不变，可在预解析阶段调用一次并缓存，
     避免 collate_fn 中每 batch 重复计算 O(B*T²*D) 的开销。
@@ -77,15 +90,23 @@ def compute_single_fork_bias(leaves: List[LeafNode]) -> torch.Tensor:
         leaves: 单个样本的叶子节点列表
 
     Returns:
-        (T, T) int8 张量 — fork bias 索引矩阵
+        Dict[str, Tensor]，每个 value 为 (T, T) int8
     """
     T = len(leaves)
     if T == 0:
-        return torch.zeros(0, 0, dtype=torch.int8)
+        return {
+            "is_group_fork": torch.zeros(0, 0, dtype=torch.int8),
+            "first_diff": torch.zeros(0, 0, dtype=torch.int8),
+            "tree_dist": torch.zeros(0, 0, dtype=torch.int8),
+        }
 
     max_path_len = max(len(l.path_ids) for l in leaves)
     if max_path_len == 0:
-        return torch.zeros(T, T, dtype=torch.int8)
+        return {
+            "is_group_fork": torch.zeros(T, T, dtype=torch.int8),
+            "first_diff": torch.zeros(T, T, dtype=torch.int8),
+            "tree_dist": torch.zeros(T, T, dtype=torch.int8),
+        }
 
     path_ids = torch.zeros(1, T, max_path_len, dtype=torch.long)
     is_group = torch.zeros(1, T, max_path_len, dtype=torch.long)
@@ -98,8 +119,8 @@ def compute_single_fork_bias(leaves: List[LeafNode]) -> torch.Tensor:
             path_ids[0, i, :L] = torch.tensor(leaf.path_ids, dtype=torch.long)
             is_group[0, i, :L] = torch.tensor(leaf.path_types, dtype=torch.long)
 
-    result = compute_fork_bias_indices(path_ids, is_group, valid_lens)
-    return result[0].to(torch.int8)
+    result = compute_structural_bias_indices(path_ids, is_group, valid_lens)
+    return {k: v[0] for k, v in result.items()}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -108,18 +129,19 @@ def compute_single_fork_bias(leaves: List[LeafNode]) -> torch.Tensor:
 
 def collate_fn(batch, max_tokens: int = 512):
     """
-    处理变长 Batch，生成 padding mask 并组装预计算的 fork bias 矩阵。
+    处理变长 Batch，生成 padding mask 并组装预计算的 structural bias 矩阵。
 
     Args:
-        batch: List of (leaves, target_masks, fork_bias) from Dataset.__getitem__
+        batch: List of (leaves, target_masks, structural_bias) from Dataset.__getitem__
         max_tokens: 截断阈值
 
     Returns:
-        (batched_leaves, batched_masks, padding_mask, fork_bias_indices)
+        (batched_leaves, batched_masks, padding_mask, structural_bias_indices)
+        structural_bias_indices: Dict[str, Tensor]，每个 value 为 (B, max_len, max_len)
     """
     batched_leaves = []
     batched_masks = []
-    fork_bias_list = []
+    bias_list = []
 
     # 约定:此处的 max_tokens 必须 >= dataset 的 max_tokens。
     # 若 dataset 已按自己的 max_tokens 截断并保护过 target leaf,collate 不应再砍。
@@ -136,18 +158,22 @@ def collate_fn(batch, max_tokens: int = 512):
 
     padding_mask = torch.ones((B, max_len), dtype=torch.bool)
 
-    for b, (leaves, masks, fork_bias) in enumerate(batch):
+    for b, (leaves, masks, structural_bias) in enumerate(batch):
         truncated_leaves = leaves[:max_len]
         truncated_masks = {k: v for k, v in masks.items() if k < max_len}
         batched_leaves.append(truncated_leaves)
         batched_masks.append(truncated_masks)
         padding_mask[b, :len(truncated_leaves)] = False
-        fork_bias_list.append(fork_bias)
+        bias_list.append(structural_bias)
 
-    # ── 组装 fork bias 矩阵：pad + stack 预计算结果 ──
-    fork_bias_indices = torch.zeros(B, max_len, max_len, dtype=torch.long)
-    for b, fb in enumerate(fork_bias_list):
-        t = min(fb.size(0), max_len)
-        fork_bias_indices[b, :t, :t] = fb[:t, :t].long()
+    # ── 组装 structural bias 矩阵：每个信号独立 pad + stack ──
+    signal_names = list(bias_list[0].keys())
+    structural_bias_indices = {}
+    for name in signal_names:
+        stacked = torch.zeros(B, max_len, max_len, dtype=torch.long)
+        for b, sb in enumerate(bias_list):
+            t = min(sb[name].size(0), max_len)
+            stacked[b, :t, :t] = sb[name][:t, :t].long()
+        structural_bias_indices[name] = stacked
 
-    return batched_leaves, batched_masks, padding_mask, fork_bias_indices
+    return batched_leaves, batched_masks, padding_mask, structural_bias_indices

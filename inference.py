@@ -4,7 +4,7 @@ Document Transformer 推理入口。
 支持：
   - --checkpoint <path> 指定权重路径
   - 若未指定，自动查找 checkpoints/ 下最新的 .pth
-  - 构建完整的 fork bias 矩阵以确保推理结果与训练一致
+  - 构建完整的 structural bias 字典以确保推理结果与训练一致
 """
 
 import os
@@ -17,7 +17,7 @@ from config import ModelConfig, MODEL_PRESETS, get_configs
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from model.json_parser import LeafNode, JSONParser
-from data.base import compute_single_fork_bias
+from data.base import compute_single_structural_bias
 
 
 def _find_latest_checkpoint(checkpoint_dir: str = "checkpoints") -> Optional[str]:
@@ -61,14 +61,15 @@ def predict(model, frozen_lm, doc, device, root_name: str = "doc"):
         print("  ⚠️  文档中未找到 [MASK] 标记")
         return []
 
-    # 构建 padding mask 和 fork bias
+    # 构建 padding mask 和 structural bias
     seq_len = len(leaves)
     padding_mask = torch.zeros((1, seq_len), dtype=torch.bool, device=device)
-    fork_bias = compute_single_fork_bias(leaves).long().unsqueeze(0).to(device)
+    bias_dict = compute_single_structural_bias(leaves)
+    bias_indices = {k: v.long().unsqueeze(0).to(device) for k, v in bias_dict.items()}
 
     # 前向推理
     with torch.no_grad():
-        out = model([leaves], padding_mask, fork_bias_indices=fork_bias)
+        out = model([leaves], padding_mask, bias_indices=bias_indices)
 
     # 提取预测
     predictions = []

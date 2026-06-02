@@ -4,14 +4,14 @@ Matbench 数据集 — 嵌套 JSON 晶体结构的 mask-predict。
 优化：
   - 初始化时预解析所有文档为 LeafNode 序列（避免 __getitem__ 重复解析）
   - 预计算 target 叶子索引
-  - 预计算 fork_bias 矩阵（路径在训练中不变，无需每 batch 重算）
-  - 支持磁盘缓存（跳过首次解析和 fork_bias 计算开销）
+  - 预计算 structural_bias 字典（路径在训练中不变，无需每 batch 重算）
+  - 支持磁盘缓存（跳过首次解析和 structural_bias 计算开销）
 
 与 TabularDataset 的核心区别：
   - 每个样本的结构不同（site 数量不同）
   - 无 BallTree / 邻居：每个 structure 自包含全部信息
   - 路径深度更深 (2-4 层 vs tabular 的 2 层)
-  - fork bias 天然区分不同 site（同一 sites 数组的不同元素）
+  - structural bias 天然区分不同 site（同一 sites 数组的不同元素）
 """
 
 import os
@@ -22,7 +22,7 @@ import torch
 from typing import List, Dict, Any, Tuple
 from torch.utils.data import Dataset
 from model.json_parser import LeafNode, JSONParser
-from data.base import compute_single_fork_bias
+from data.base import compute_single_structural_bias
 
 
 class MatbenchDataset(Dataset):
@@ -30,10 +30,10 @@ class MatbenchDataset(Dataset):
     Matbench 晶体结构数据集（预解析版）。
 
     初始化时一次性将所有 JSON doc 解析为 LeafNode 序列，
-    并预计算每个样本的 fork_bias 矩阵。
+    并预计算每个样本的 structural_bias 字典。
     __getitem__ 只做 mask + 返回，速度极快。
 
-    支持缓存：解析结果和 fork_bias 存到磁盘，下次直接加载。
+    支持缓存：解析结果和 structural_bias 存到磁盘，下次直接加载。
     """
 
     def __init__(self, docs: list, max_tokens: int = 512,
@@ -59,7 +59,7 @@ class MatbenchDataset(Dataset):
                 cached = pickle.load(f)
             self._all_leaves = cached["all_leaves"]
             self._target_indices = cached["target_indices"]
-            self._all_fork_bias = cached["all_fork_bias"]
+            self._all_structural_bias = cached["all_structural_bias"]
             self._n_truncated = cached["n_truncated"]
             print(f"    ✅ {len(self._all_leaves)} samples loaded from cache")
         else:
@@ -118,8 +118,8 @@ class MatbenchDataset(Dataset):
 
             print(f"    ✅ Pre-parsed {len(self._all_leaves)} documents")
 
-            # ── 预计算 fork_bias ──
-            self._precompute_fork_bias()
+            # ── 预计算 structural_bias ──
+            self._precompute_structural_bias()
 
             # ── 保存缓存 ──
             if cache_path:
@@ -140,19 +140,22 @@ class MatbenchDataset(Dataset):
                 stacklevel=2,
             )
 
-    def _precompute_fork_bias(self):
-        """预计算所有样本的 fork_bias 矩阵，存为 int8 节省内存。"""
+    def _precompute_structural_bias(self):
+        """预计算所有样本的 structural_bias 字典，各信号存为 int8 节省内存。"""
         n = len(self._all_leaves)
-        print(f"    ⏳ Precomputing fork bias for {n} samples...")
-        self._all_fork_bias = []
+        print(f"    ⏳ Precomputing structural bias for {n} samples...")
+        self._all_structural_bias = []
         for i, leaves in enumerate(self._all_leaves):
-            fb = compute_single_fork_bias(leaves)
-            self._all_fork_bias.append(fb)
+            sb = compute_single_structural_bias(leaves)
+            self._all_structural_bias.append(sb)
             if (i + 1) % 10000 == 0:
                 print(f"      ... {i+1}/{n}")
         # 估算内存占用
-        total_bytes = sum(fb.nelement() * fb.element_size() for fb in self._all_fork_bias)
-        print(f"    ✅ Fork bias precomputed ({total_bytes / 1024 / 1024:.1f} MB in memory)")
+        total_bytes = sum(
+            sum(v.nelement() * v.element_size() for v in sb.values())
+            for sb in self._all_structural_bias
+        )
+        print(f"    ✅ Structural bias precomputed ({total_bytes / 1024 / 1024:.1f} MB in memory)")
 
     def _save_cache(self, cache_path):
         """保存解析结果和 fork_bias 到磁盘缓存。"""
@@ -160,7 +163,7 @@ class MatbenchDataset(Dataset):
         data = {
             "all_leaves": self._all_leaves,
             "target_indices": self._target_indices,
-            "all_fork_bias": self._all_fork_bias,
+            "all_structural_bias": self._all_structural_bias,
             "n_truncated": self._n_truncated,
         }
         with open(cache_path, "wb") as f:
@@ -177,11 +180,11 @@ class MatbenchDataset(Dataset):
     def __len__(self):
         return len(self._all_leaves)
 
-    def __getitem__(self, idx) -> Tuple[List[LeafNode], Dict[int, Any], torch.Tensor]:
+    def __getitem__(self, idx) -> Tuple[List[LeafNode], Dict[int, Any], Dict[str, torch.Tensor]]:
         # ── 复制预解析的叶子（避免修改原数据）──
         leaves = list(self._all_leaves[idx])
         target_idx = self._target_indices[idx]
-        fork_bias = self._all_fork_bias[idx]
+        structural_bias = self._all_structural_bias[idx]
 
         # ── Mask target ──
         target_masks = {}
@@ -202,4 +205,4 @@ class MatbenchDataset(Dataset):
                 f"Check the upstream loader (structure_to_json) for documents without targets."
             )
 
-        return leaves, target_masks, fork_bias
+        return leaves, target_masks, structural_bias
