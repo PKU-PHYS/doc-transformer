@@ -267,8 +267,29 @@ def train_stage(
     print(f"  max_epochs={max_epochs}, patience={patience}")
     print(f"{'='*70}\n")
 
-    optimizer = AdamW(model.parameters(), lr=train_config.lr, 
-                      weight_decay=train_config.weight_decay, betas=train_config.betas)
+    # weight decay 分组：bias / LayerNorm 等 1-D 参数，以及结构 bias 编码器，统一排除出 weight decay。
+    # 1-D 参数（bias、norm 的 γ/β）是标定参数，按惯例不做 weight decay。
+    # bias_encoder 用 sinusoidal + Linear 过参数化编码，同一 bias 效果所需的最小参数范数被 ‖sinusoidal‖²
+    # 缩放（约 1/17），导致 weight decay 对它的等效惩罚远小于最小参数化（Embedding），两者不对称。
+    # 统一排除可消除这种非对称压制，让参数化选择不再隐式改变正则化强度。
+    # path_encoder.h0 是 GRU 的可学习初始隐状态，本质是加性常数（bias 类），仅因形状为 3-D
+    # 而漏过 ndim<=1 判据，显式排除。
+    decay_params, no_decay_params = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.ndim <= 1 or "bias_encoder" in name or name.endswith(".h0"):
+            no_decay_params.append(p)
+        else:
+            decay_params.append(p)
+    optimizer = AdamW(
+        [
+            {"params": decay_params, "weight_decay": train_config.weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ],
+        lr=train_config.lr,
+        betas=train_config.betas,
+    )
     
     # 预估总步数和 Warmup 步数
     # DataLoader 默认 drop_last=False,len(loader) 是 ceil,这里用 ceil 与之对齐,避免末尾 batch 在 LR=0 下空转
