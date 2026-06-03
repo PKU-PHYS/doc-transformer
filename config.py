@@ -16,6 +16,10 @@ class ModelConfig:
     
     # Structural Bias 编码维度 (正弦编码 → 可学习投影)
     bias_encoding_dim: int = 32
+    # Structural Bias 各信号开关 (训练/推理均生效)
+    bias_is_group_fork: bool = True
+    bias_first_diff: bool = True
+    bias_tree_dist: bool = True
     
     # 傅里叶特征 (数值编码用)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128

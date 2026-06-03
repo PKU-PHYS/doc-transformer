@@ -107,6 +107,10 @@ class GlobalTransformer(nn.Module):
         self.bias_encoder.register_category("is_group_fork", num_classes=2)
         self.bias_encoder.register_continuous("first_diff")
         self.bias_encoder.register_continuous("tree_dist")
+        # Apply config-driven enable flags
+        self.bias_encoder.set_enabled("is_group_fork", config.bias_is_group_fork)
+        self.bias_encoder.set_enabled("first_diff", config.bias_first_diff)
+        self.bias_encoder.set_enabled("tree_dist", config.bias_tree_dist)
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.d_model,
