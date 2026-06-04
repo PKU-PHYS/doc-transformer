@@ -47,7 +47,13 @@ class StructuralBiasEncoder(nn.Module):
         self._enabled[name] = enabled
 
     def _sinusoidal_encode(self, levels: Tensor) -> Tensor:
-        """levels: 任意形状整数张量 → (..., encoding_dim)"""
+        """levels: 任意形状整数张量 → (..., encoding_dim)
+
+        归一化到 ‖b‖²=1：sinusoidal 基底 ‖b‖² = half（每个频率 sin²+cos²=1），
+        固定基底 + 线性投影下输出空间有效 lr ∝ ‖b‖²+1，会把该信号隐式放大 ~(half+1)×。
+        缩放到单位范数使其有效 lr 与 category(Embedding) 同量级，消除隐藏自由度。
+        proj 为零初始化，故无需 init 补偿（初始输出恒为 0）。
+        """
         half = self.encoding_dim // 2
         div_term = torch.exp(
             torch.arange(half, device=levels.device, dtype=torch.float32)
@@ -57,7 +63,7 @@ class StructuralBiasEncoder(nn.Module):
         pe = torch.zeros(*levels.shape, self.encoding_dim, device=levels.device)
         pe[..., 0::2] = torch.sin(pos * div_term)
         pe[..., 1::2] = torch.cos(pos * div_term)
-        return pe
+        return pe * (half ** -0.5)
 
     def forward(self, **signals: Tensor) -> Tensor:
         """

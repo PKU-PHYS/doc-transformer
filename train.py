@@ -269,27 +269,34 @@ def train_stage(
 
     # weight decay 分组：bias / LayerNorm 等 1-D 参数，以及结构 bias 编码器，统一排除出 weight decay。
     # 1-D 参数（bias、norm 的 γ/β）是标定参数，按惯例不做 weight decay。
-    # bias_encoder 用 sinusoidal + Linear 过参数化编码，同一 bias 效果所需的最小参数范数被 ‖sinusoidal‖²
-    # 缩放（约 1/17），导致 weight decay 对它的等效惩罚远小于最小参数化（Embedding），两者不对称。
-    # 统一排除可消除这种非对称压制，让参数化选择不再隐式改变正则化强度。
+    # bias_encoder 整体免 weight decay（参数量极小、本质是加性偏置，正则无意义）。
     # path_encoder.h0 是 GRU 的可学习初始隐状态，本质是加性常数（bias 类），仅因形状为 3-D
     # 而漏过 ndim<=1 判据，显式排除。
-    decay_params, no_decay_params = [], []
+    # 注：各编码器的有效学习率差异已在编码器内部用基底归一化（‖b‖²=1）统一处理。
+    # 在此干净基线上，整个 bias_encoder 单独成组、施加 structural_bias_lr_mult 倍率：
+    # 这是主动选定的工作点（让零初始化的注意力偏置赶在 backbone 锁死前建立），挂在编码器
+    # 角色上而非单个信号，保持 schema-agnostic。bias_encoder 同时免 weight decay。
+    bias_params, no_decay_params, decay_params = [], [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if p.ndim <= 1 or "bias_encoder" in name or name.endswith(".h0"):
+        if "bias_encoder" in name:
+            bias_params.append(p)
+        elif p.ndim <= 1 or name.endswith(".h0"):
             no_decay_params.append(p)
         else:
             decay_params.append(p)
-    optimizer = AdamW(
-        [
-            {"params": decay_params, "weight_decay": train_config.weight_decay},
-            {"params": no_decay_params, "weight_decay": 0.0},
-        ],
-        lr=train_config.lr,
-        betas=train_config.betas,
-    )
+    param_groups = [
+        {"params": decay_params, "weight_decay": train_config.weight_decay, "lr": train_config.lr},
+        {"params": no_decay_params, "weight_decay": 0.0, "lr": train_config.lr},
+    ]
+    if bias_params:
+        param_groups.append({
+            "params": bias_params,
+            "weight_decay": 0.0,
+            "lr": train_config.lr * train_config.structural_bias_lr_mult,
+        })
+    optimizer = AdamW(param_groups, lr=train_config.lr, betas=train_config.betas)
     
     # 预估总步数和 Warmup 步数
     # DataLoader 默认 drop_last=False,len(loader) 是 ceil,这里用 ceil 与之对齐,避免末尾 batch 在 LR=0 下空转

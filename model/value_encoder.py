@@ -23,10 +23,20 @@ class FourierFeatureEncoder(nn.Module):
             
         self.proj = nn.Linear(2 * n_feats, d_model)
 
+        # ── 有效学习率归一化 ──
+        # fourier 特征 ‖b‖² = n_feats（每个频率 sin²+cos²=1）。固定基底 + 线性投影下，
+        # 输出空间有效 lr ∝ ‖b‖²+1，使尾数相对最小参数化(Embedding)被隐式放大 ~(n_feats+1)×。
+        # 把基底缩放到 ‖b‖²=1，使其有效 lr 与指数 Embedding 同量级，消除该隐藏自由度。
+        self.feat_scale = n_feats ** -0.5
+        # 同步把 proj 权重 init 放大 1/feat_scale，使初始输出幅值不变 → 只改学习动力学，不改 init 分布。
+        with torch.no_grad():
+            self.proj.weight.mul_(1.0 / self.feat_scale)
+
     def forward(self, x: Tensor) -> Tensor:
         # x shape: (N,) -> (N, 1)
         angles = x.unsqueeze(-1) * self.freqs  # (N, 1) * (n_feats) -> (N, n_feats)
         fourier = torch.cat([angles.sin(), angles.cos()], dim=-1) # (N, 2*n_feats)
+        fourier = fourier * self.feat_scale  # 归一化到 ‖b‖²=1（见 __init__）
         return self.proj(fourier) # (N, d_model)
 
 

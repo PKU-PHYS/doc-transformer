@@ -54,6 +54,12 @@ class TrainConfig:
     lr: float = 1e-4            # AdamW 学习率
     weight_decay: float = 0.01  # AdamW 权重衰减
     betas: tuple = (0.9, 0.95)  # AdamW 动量参数 (β1, β2)
+    # 结构 bias 编码器（整个 StructuralBiasEncoder）的 lr 倍率。
+    # 各信号的基底已在编码器内归一化到 ‖b‖²=1（有效 lr 统一为 ~1×），此倍率是在该干净基线上
+    # 主动选定的、统一施加的工作点——而非基底维数造成的偶然放大。
+    # 动机：零初始化的 attention 偏置需赶在 backbone 锁死前长到决定性幅度（见赛跑/critical-period 假设）。
+    # =1.0 关闭；恢复实验中 fork ≈20× 达到 0.188，故默认 20.0。挂在编码器角色上而非单个信号，保持 schema-agnostic。
+    structural_bias_lr_mult: float = 20.0
     device: str = "cuda"
     num_workers: int = 0        # DataLoader 进程数 (0=主进程，避免 fork COW 开销)
     max_cpu_workers: int = 32   # 全局 CPU 密集型任务（如数据预处理）的最大进程数
