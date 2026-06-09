@@ -41,6 +41,11 @@ class ModelConfig:
     loss_scale_power: float = 0.0
     # 额外压缩尺度: s·arcsinh(m/s)，=1 默认; >1 进一步放宽
     loss_compression_scale: float = 1.0
+    # 数值输出约束：
+    #   "linear": 无约束，适用于一般回归
+    #   "softplus": 非负输出，适用于 band gap 等物理非负目标
+    numeric_output: str = "linear"
+    numeric_softplus_beta: float = 1.0
     
     # ── 零值分类头 ──
     use_zero_head: bool = False     # 是否启用零值分类头

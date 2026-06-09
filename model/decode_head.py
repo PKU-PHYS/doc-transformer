@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 from config import ModelConfig
 
@@ -9,6 +10,7 @@ class DecodeHead(nn.Module):
     """
     def __init__(self, config: ModelConfig):
         super().__init__()
+        self.config = config
         
         # 数值预测：输出 1 维标量
         self.num_head = nn.Linear(config.d_model, 1)
@@ -33,7 +35,13 @@ class DecodeHead(nn.Module):
         x_mask: (N_mask, d_model)
         返回: (N_mask,)
         """
-        return self.num_head(x_mask).squeeze(-1)
+        raw = self.num_head(x_mask).squeeze(-1)
+        if self.config.numeric_output == "linear":
+            return raw
+        if self.config.numeric_output == "softplus":
+            beta = self.config.numeric_softplus_beta
+            return F.softplus(raw, beta=beta)
+        raise ValueError(f"Unknown numeric_output: {self.config.numeric_output!r}")
         
     def predict_boolean(self, x_mask: Tensor) -> Tensor:
         """

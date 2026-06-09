@@ -620,6 +620,11 @@ def main():
                         help="Override ModelConfig.loss_scale_power")
     parser.add_argument("--loss-compression-scale", type=float, default=None,
                         help="Override ModelConfig.loss_compression_scale")
+    parser.add_argument("--numeric-output", type=str, default=None,
+                        choices=["linear", "softplus"],
+                        help="Override ModelConfig.numeric_output")
+    parser.add_argument("--numeric-softplus-beta", type=float, default=None,
+                        help="Override ModelConfig.numeric_softplus_beta")
     parser.add_argument("--use-zero-head", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Enable numeric zero auxiliary/classification head")
@@ -657,6 +662,10 @@ def main():
         model_config.loss_scale_power = args.loss_scale_power
     if args.loss_compression_scale is not None:
         model_config.loss_compression_scale = args.loss_compression_scale
+    if args.numeric_output is not None:
+        model_config.numeric_output = args.numeric_output
+    if args.numeric_softplus_beta is not None:
+        model_config.numeric_softplus_beta = args.numeric_softplus_beta
     if args.use_zero_head is not None:
         model_config.use_zero_head = args.use_zero_head
     if args.zero_threshold is not None:
@@ -687,6 +696,7 @@ def main():
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
+              f"output={model_config.numeric_output}, "
               f"zero_head={model_config.use_zero_head}")
         print(f"Matbench task: {args.dataset} — {mb_config.description}")
         print(f"Eval metric: {eval_metric.upper()}")
@@ -727,6 +737,7 @@ def main():
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
+              f"output={model_config.numeric_output}, "
               f"zero_head={model_config.use_zero_head}")
         print(f"Dataset config: n_rows={ds_config.n_rows}, "
               f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
@@ -823,6 +834,8 @@ def main():
         f"loss_exponent_max={model_config.loss_exponent_max}, "
         f"loss_scale_power={model_config.loss_scale_power}, "
         f"loss_compression_scale={model_config.loss_compression_scale}, "
+        f"numeric_output={model_config.numeric_output}, "
+        f"numeric_softplus_beta={model_config.numeric_softplus_beta}, "
         f"use_zero_head={model_config.use_zero_head}, "
         f"zero_threshold={model_config.zero_threshold}, "
         f"zero_neg_weight={model_config.zero_neg_weight}",
