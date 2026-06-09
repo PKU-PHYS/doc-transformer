@@ -767,24 +767,25 @@ def main():
         if is_matbench:
             # 构建含选项的 cache_tag（逻辑由 configs 模块管理）
             opts_tag = build_cache_tag(dataset_options)
+            split_tag = f"{args.matbench_split}_f{args.matbench_fold}_val{args.matbench_val_ratio:g}"
 
             # Matbench: 每个 doc 是独立嵌套 JSON
             dataset = MatbenchDataset(
                 docs=mb_loader.train_docs,
                 max_tokens=model_config.max_tokens,
-                cache_tag=f"{args.dataset}{opts_tag}_{args.matbench_split}_f{args.matbench_fold}_train",
+                cache_tag=f"{args.dataset}{opts_tag}_{split_tag}_train",
             )
             val_ds = MatbenchDataset(
                 docs=mb_loader.val_docs,
                 max_tokens=model_config.max_tokens,
-                cache_tag=f"{args.dataset}{opts_tag}_{args.matbench_split}_f{args.matbench_fold}_val",
+                cache_tag=f"{args.dataset}{opts_tag}_{split_tag}_val",
             ) if mb_loader.val_docs else None
             test_ds = None
             if args.eval_test:
                 test_ds = MatbenchDataset(
                     docs=mb_loader.test_docs,
                     max_tokens=model_config.max_tokens,
-                    cache_tag=f"{args.dataset}{opts_tag}_{args.matbench_split}_f{args.matbench_fold}_test",
+                    cache_tag=f"{args.dataset}{opts_tag}_{split_tag}_test",
                 )
         else:
             # Tabular: 多行表格 + BallTree 邻居
