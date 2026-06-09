@@ -191,6 +191,48 @@ does not beat the current low-LR warm-restart best (`0.18526953161707985`
 calibrated internal-val MAE). It may still be a useful starting point for a
 controlled low-LR warm restart or for a lighter feature ablation.
 
+## Statistics Feature Low-LR Warm Restart
+
+Run directory:
+
+`checkpoints/20260609_234526_matbench_mp_gap_comp_elprops_cewald_nn_cnn_dropcoords_cewalds_cnns_resumed`
+
+Warm-restart command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-element-props --add-comp-ewald --add-nn-stats \
+  --add-comp-nn --add-comp-ewald-stats --add-comp-nn-stats --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 15 --patience 15 --max-cpu-workers 4 \
+  --checkpoint-interval 5 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --resume checkpoints/20260609_222021_matbench_mp_gap_comp_elprops_cewald_nn_cnn_dropcoords_cewalds_cnns/matbench_mp_gap_train_best_val.pth \
+  --warm-restart --lr 2e-6
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19300220214263744`
+- Best raw epoch: `8`
+- Final epoch raw internal-val MAE: `0.19340285103839483`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9768965517241379`
+- `prediction_bias`: `0.00047254222091929664`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.094`
+- Train raw MAE: `0.06498312749288561`
+- Train calibrated MAE: `0.053346660631316344`
+- Internal-val raw MAE: `0.19301664289693302`
+- Internal-val calibrated MAE: `0.18749063962038412`
+
+The warm restart improves the statistics-feature run, but still does not beat
+the current base-feature low-LR warm-restart best.
+
 ## Baseline Reference
 
 Run directory:
