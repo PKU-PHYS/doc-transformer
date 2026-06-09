@@ -321,6 +321,47 @@ internal-val MAE). The next useful ablation is to enable only one of the two new
 signals at a time, starting with `same_parent`, because the paired signal may
 add redundant or conflicting attention priors.
 
+## Same-Parent Structural Bias Ablation
+
+Run directory:
+
+`checkpoints/20260610_010626_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --bias-same-parent
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19516862255564735`
+- Best raw epoch: `50`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9749137931034483`
+- `prediction_bias`: `3.7703006769177214e-05`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.116`
+- Train raw MAE: `0.07989941724063926`
+- Train calibrated MAE: `0.0669026149064464`
+- Internal-val raw MAE: `0.19518531278645382`
+- Internal-val calibrated MAE: `0.18822475042954695`
+
+Conclusion: `same_parent` alone is a small positive result over the base
+50-epoch schedule (`0.18897` calibrated internal-val MAE), and is cleaner than
+the paired shared-group-depth run. It still does not beat the current best, so
+the next test is a controlled low-LR warm restart from this checkpoint.
+
 ## Notes
 
 - These are not final official Matbench test results.
