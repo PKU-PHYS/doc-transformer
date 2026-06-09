@@ -143,6 +143,54 @@ Calibration result:
 - Internal-val raw MAE: `0.1958378539378899`
 - Internal-val calibrated MAE: `0.1889698844736923`
 
+## Element/NN/Ewald Statistics Feature Result
+
+Run directory:
+
+`checkpoints/20260609_222021_matbench_mp_gap_comp_elprops_cewald_nn_cnn_dropcoords_cewalds_cnns`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn \
+  --add-comp-ewald-stats --add-comp-nn-stats --add-nn-stats --add-element-props \
+  --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0
+```
+
+This feature set adds per-element electronegativity/ionization/electron-affinity
+properties, global nearest-neighbor summary tokens, and per-composition
+Ewald/nearest-neighbor distribution statistics. It keeps the same official fold0
+train/internal-val protocol and leaves the test fold blind.
+
+Training result:
+
+- Best raw internal-val MAE: `0.19380969149196547`
+- Best raw epoch: `46`
+- Final epoch raw internal-val MAE: `0.19417301546992194`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `-0.0027797758539110937`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.09211876527839818`
+- Train raw MAE: `0.06721239903507012`
+- Train calibrated MAE: `0.05566641541358365`
+- Internal-val raw MAE: `0.19380021669323552`
+- Internal-val calibrated MAE: `0.18829754023237796`
+
+This is a small positive result over the 50-epoch base-feature schedule, but it
+does not beat the current low-LR warm-restart best (`0.18526953161707985`
+calibrated internal-val MAE). It may still be a useful starting point for a
+controlled low-LR warm restart or for a lighter feature ablation.
+
 ## Baseline Reference
 
 Run directory:
