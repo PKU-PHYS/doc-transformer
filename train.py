@@ -248,6 +248,7 @@ def train_stage(
     test_dataset=None,
     eval_test: bool = False,
     eval_metric: str = "rmse",
+    log_every: int = 50,
 ) -> dict:
     """
     训练单个 Stage，基于 loss plateau 自动结束。
@@ -423,14 +424,19 @@ def train_stage(
                 writer.add_scalar(f"{stage_name}/lr", optimizer.param_groups[0]["lr"], global_step)
                 writer.add_scalar(f"{stage_name}/grad_norm", grad_norm.item(), global_step)
 
-            # ── 每 batch 输出 loss ──
-            avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
-            lr_now = optimizer.param_groups[0]["lr"]
-            print(f"  [{time.strftime('%H:%M:%S')}] [{stage_name}] E{epoch+1:03d} "
-                  f"B{batch_idx:04d}/{len(loader)} "
-                  f"Loss={batch_loss:.6f} "
-                  f"tokens={avg_tokens:.0f} "
-                  f"lr={lr_now:.2e}")
+            # ── 间隔输出 batch loss，避免长实验刷爆终端日志 ──
+            should_log_batch = (
+                log_every > 0
+                and (batch_idx == 0 or (batch_idx + 1) % log_every == 0 or batch_idx + 1 == len(loader))
+            )
+            if should_log_batch:
+                avg_tokens = sum(len(l) for l in batched_leaves) / len(batched_leaves)
+                lr_now = optimizer.param_groups[0]["lr"]
+                print(f"  [{time.strftime('%H:%M:%S')}] [{stage_name}] E{epoch+1:03d} "
+                      f"B{batch_idx:04d}/{len(loader)} "
+                      f"Loss={batch_loss:.6f} "
+                      f"tokens={avg_tokens:.0f} "
+                      f"lr={lr_now:.2e}")
                       
             scheduler.step()
 
@@ -609,6 +615,8 @@ def main():
                         help="Override every stage patience")
     parser.add_argument("--checkpoint-interval", type=int, default=10,
                         help="Save training-state checkpoints every N epochs")
+    parser.add_argument("--log-every", type=int, default=50,
+                        help="Print one training batch every N batches (0 disables batch prints)")
     args = parser.parse_args()
     validate_matbench_args(args, parser)
 
@@ -811,6 +819,7 @@ def main():
             eval_test=args.eval_test,
             eval_metric=eval_metric,
             checkpoint_interval=args.checkpoint_interval,
+            log_every=args.log_every,
         )
         save_checkpoint(model, f"{stage_cfg.name}_final", checkpoint_dir, log)
         all_logs[stage_cfg.name] = log
