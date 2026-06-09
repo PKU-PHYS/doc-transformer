@@ -448,6 +448,53 @@ beat the current best. The paired shared-bias result is therefore not hiding a
 useful `shared_group_depth` effect; the next structural-bias work should keep
 `same_parent` as the only promising added signal.
 
+## L1 Numeric Loss Ablation
+
+Commit:
+
+`240fc1e feat: add numeric loss option`
+
+Run directory:
+
+`checkpoints/20260610_023615_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-loss l1
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.20050058203986626`
+- Best raw epoch: `50`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9749137931034483`
+- `prediction_bias`: `0.0030287794584151484`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.010468318050149198`
+- Train raw MAE: `0.10989800494202821`
+- Train calibrated MAE: `0.10153049916868487`
+- Internal-val raw MAE: `0.20050122286720512`
+- Internal-val calibrated MAE: `0.1956320670321587`
+- Internal-val calibrated zero fraction: `0.46306985510660853`
+
+Conclusion: replacing the compressed-space Huber loss with pure L1 is a clear
+negative result. It makes near-zero predictions very aggressive, but weakens
+the nonzero band-gap regression enough that calibration cannot recover the
+baseline. The next numeric-loss test should keep Huber smoothing and tune its
+delta/transition point rather than moving all the way to L1.
+
 ## Notes
 
 - These are not final official Matbench test results.
