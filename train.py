@@ -244,7 +244,9 @@ def train_stage(
     global_step: int = 0,
     checkpoint_interval: int = 5,
     resume_ckpt: dict = None,
+    val_dataset=None,
     test_dataset=None,
+    eval_test: bool = False,
     eval_metric: str = "rmse",
 ) -> dict:
     """
@@ -368,7 +370,16 @@ def train_stage(
     )
 
     test_loader = None
-    if test_dataset is not None:
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=train_config.batch_size,
+            shuffle=False,
+            collate_fn=functools.partial(collate_fn, max_tokens=model_config.max_tokens),
+            num_workers=0,
+        )
+    if eval_test and test_dataset is not None:
         test_loader = DataLoader(
             test_dataset,
             batch_size=train_config.batch_size,
@@ -462,18 +473,32 @@ def train_stage(
         if writer is not None:
             writer.add_scalar(f"{stage_name}/{train_metric_name}", train_score, epoch + 1)
 
-        # ── Test 评估 ──
+        # ── Validation 评估（Matbench 优化阶段只看 val,不碰 held-out test）──
+        val_score = None
+        if val_loader is not None:
+            val_score = evaluate(model, val_loader, device, metric=eval_metric)
+            val_metric_name = f"val_{eval_metric}"
+            stage_log.setdefault(val_metric_name, []).append(val_score)
+            if writer is not None:
+                writer.add_scalar(f"{stage_name}/{val_metric_name}", val_score, epoch + 1)
+
+        # ── Test 评估（必须显式 --eval-test,避免调参泄漏）──
+        test_score = None
         if test_loader is not None:
             test_score = evaluate(model, test_loader, device, metric=eval_metric)
             test_metric_name = f"test_{eval_metric}"
             stage_log.setdefault(test_metric_name, []).append(test_score)
             if writer is not None:
                 writer.add_scalar(f"{stage_name}/{test_metric_name}", test_score, epoch + 1)
-            print(f"  🎯 Train {eval_metric.upper()}: {train_score:.4f}  |  "
-                  f"Test {eval_metric.upper()}: {test_score:.4f}  |  "
-                  f"Gap: {test_score - train_score:.4f}")
-        else:
-            print(f"  🎯 Train {eval_metric.upper()}: {train_score:.4f}")
+
+        score_parts = [f"Train {eval_metric.upper()}: {train_score:.4f}"]
+        if val_score is not None:
+            score_parts.append(f"Val {eval_metric.upper()}: {val_score:.4f}")
+            score_parts.append(f"ValGap: {val_score - train_score:.4f}")
+        if test_score is not None:
+            score_parts.append(f"Test {eval_metric.upper()}: {test_score:.4f}")
+            score_parts.append(f"TestGap: {test_score - train_score:.4f}")
+        print("  🎯 " + "  |  ".join(score_parts))
 
         # ── TensorBoard: per-epoch metrics ──
         if writer is not None:
@@ -563,12 +588,39 @@ def main():
     register_matbench_args(parser)
     parser.add_argument("--warm-restart", action="store_true", default=False,
                         help="With --resume: only load model weights, discard optimizer/scheduler/RNG")
+    parser.add_argument("--matbench-split", type=str, default="official",
+                        choices=["official", "random"],
+                        help="[Matbench] Split strategy. official uses Matbench v0.1 folds")
+    parser.add_argument("--matbench-fold", type=int, default=0,
+                        help="[Matbench] Official fold number to use (default: 0)")
+    parser.add_argument("--matbench-val-ratio", type=float, default=0.1,
+                        help="[Matbench] Internal validation ratio carved only from official train+val")
+    parser.add_argument("--eval-test", action="store_true", default=False,
+                        help="Evaluate held-out test each epoch. Keep off during model selection.")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Override TrainConfig.batch_size")
+    parser.add_argument("--lr", type=float, default=None,
+                        help="Override TrainConfig.lr")
+    parser.add_argument("--max-cpu-workers", type=int, default=None,
+                        help="Override TrainConfig.max_cpu_workers")
+    parser.add_argument("--max-epochs", type=int, default=None,
+                        help="Override every stage max_epochs")
+    parser.add_argument("--patience", type=int, default=None,
+                        help="Override every stage patience")
+    parser.add_argument("--checkpoint-interval", type=int, default=10,
+                        help="Save training-state checkpoints every N epochs")
     args = parser.parse_args()
     validate_matbench_args(args, parser)
 
     set_seed(SEED)
 
     model_config, train_config = get_configs(args.model_size)
+    if args.batch_size is not None:
+        train_config.batch_size = args.batch_size
+    if args.lr is not None:
+        train_config.lr = args.lr
+    if args.max_cpu_workers is not None:
+        train_config.max_cpu_workers = args.max_cpu_workers
     print(f"  📐 Model preset: {args.model_size}")
 
     is_matbench = args.dataset.startswith("matbench_")
@@ -597,8 +649,21 @@ def main():
         mb_loader = MatbenchLoader(args.dataset,
                                    max_tokens=model_config.max_tokens,
                                    dataset_options=dataset_options,
-                                   max_cpu_workers=train_config.max_cpu_workers)
+                                   max_cpu_workers=train_config.max_cpu_workers,
+                                   split_strategy=args.matbench_split,
+                                   fold=args.matbench_fold,
+                                   val_ratio=args.matbench_val_ratio,
+                                   include_test_targets=args.eval_test)
         stages = mb_config.stages
+        if args.max_epochs is not None or args.patience is not None:
+            stages = [
+                type(s)(
+                    name=s.name,
+                    max_epochs=args.max_epochs if args.max_epochs is not None else s.max_epochs,
+                    patience=args.patience if args.patience is not None else s.patience,
+                )
+                for s in stages
+            ]
 
     else:
         # ═══════════════════════════════════════════
@@ -680,6 +745,11 @@ def main():
     if is_matbench:
         opts_str = ", ".join(f"{k}={v}" for k, v in sorted(dataset_options.items())) or "default"
         writer.add_text("config/dataset_options", opts_str)
+        writer.add_text(
+            "config/matbench_split",
+            f"strategy={args.matbench_split}, fold={args.matbench_fold}, "
+            f"val_ratio={args.matbench_val_ratio}, eval_test={args.eval_test}",
+        )
 
     all_logs = {}
 
@@ -694,13 +764,20 @@ def main():
             dataset = MatbenchDataset(
                 docs=mb_loader.train_docs,
                 max_tokens=model_config.max_tokens,
-                cache_tag=f"{args.dataset}{opts_tag}_train",
+                cache_tag=f"{args.dataset}{opts_tag}_{args.matbench_split}_f{args.matbench_fold}_train",
             )
-            test_ds = MatbenchDataset(
-                docs=mb_loader.test_docs,
+            val_ds = MatbenchDataset(
+                docs=mb_loader.val_docs,
                 max_tokens=model_config.max_tokens,
-                cache_tag=f"{args.dataset}{opts_tag}_test",
-            )
+                cache_tag=f"{args.dataset}{opts_tag}_{args.matbench_split}_f{args.matbench_fold}_val",
+            ) if mb_loader.val_docs else None
+            test_ds = None
+            if args.eval_test:
+                test_ds = MatbenchDataset(
+                    docs=mb_loader.test_docs,
+                    max_tokens=model_config.max_tokens,
+                    cache_tag=f"{args.dataset}{opts_tag}_{args.matbench_split}_f{args.matbench_fold}_test",
+                )
         else:
             # Tabular: 多行表格 + BallTree 邻居
             dataset = TabularDataset(
@@ -713,6 +790,7 @@ def main():
                 n_rows=ds_config.n_rows,
                 max_tokens=model_config.max_tokens,
             )
+            val_ds = None
 
         stage_name = f"{args.dataset}_{stage_cfg.name}"
         log, global_step = train_stage(
@@ -728,8 +806,11 @@ def main():
             writer=writer,
             global_step=global_step,
             resume_ckpt=resume_ckpt if stage_idx == 0 else None,
+            val_dataset=val_ds,
             test_dataset=test_ds,
+            eval_test=args.eval_test,
             eval_metric=eval_metric,
+            checkpoint_interval=args.checkpoint_interval,
         )
         save_checkpoint(model, f"{stage_cfg.name}_final", checkpoint_dir, log)
         all_logs[stage_cfg.name] = log
@@ -756,4 +837,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

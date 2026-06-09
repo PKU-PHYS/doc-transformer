@@ -10,11 +10,18 @@ Matbench 数据加载器 — 将 pymatgen Structure 转为嵌套 JSON。
 
 import hashlib
 import json
+import math
 import random
 import warnings
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Optional, Tuple
+
+from data.matbench.splits import (
+    coerce_ids_to_index_type,
+    official_fold_ids,
+    split_internal_train_val,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -635,11 +642,12 @@ class MatbenchLoader:
     Matbench 任务数据加载器。
 
     加载 matminer 数据 → 转为嵌套 JSON docs 列表。
-    支持 train/test split + 磁盘缓存。
+    支持 official fold 的 train/val/test split + 磁盘缓存。
 
     Attributes:
         task_name:   Matbench 任务名 (e.g., "matbench_dielectric")
         train_docs:  List[dict] 训练集 JSON 文档
+        val_docs:    List[dict] 验证集 JSON 文档（仅来自 official train+val）
         test_docs:   List[dict] 测试集 JSON 文档
         target_key:  预测目标的 key 名 ("target")
     """
@@ -647,11 +655,19 @@ class MatbenchLoader:
     def __init__(self, task_name: str, max_tokens: int = 256,
                  test_ratio: float = 0.2, seed: int = 42,
                  dataset_options: dict = None,
-                 max_cpu_workers: int = 32):
+                 max_cpu_workers: int = 32,
+                 split_strategy: str = "official",
+                 fold: int = 0,
+                 val_ratio: float = 0.1,
+                 include_test_targets: bool = False):
         self.task_name = task_name
         self.max_tokens = max_tokens
         self.target_key = "target"
         self.max_cpu_workers = max_cpu_workers
+        self.split_strategy = split_strategy
+        self.fold = fold
+        self.val_ratio = val_ratio
+        self.include_test_targets = include_test_targets
 
         # 解析 dataset_options
         opts = dataset_options or {}
@@ -679,16 +695,20 @@ class MatbenchLoader:
                                       add_comp_ewald, add_spacegroup, add_nn_stats,
                                       add_density, add_comp_nn,
                                       add_comp_ewald_stats, add_comp_nn_stats,
-                                      add_mean_bonds, seed)
+                                      add_mean_bonds, seed,
+                                      split_strategy, fold, val_ratio, test_ratio,
+                                      include_test_targets)
         if cache_path.exists():
             print(f"  💾 Loading cached data: {cache_path}")
             import pickle
             with open(cache_path, "rb") as f:
                 cached = pickle.load(f)
             self.train_docs = cached["train_docs"]
+            self.val_docs = cached.get("val_docs", [])
             self.test_docs = cached["test_docs"]
+            self.split_metadata = cached.get("split_metadata", {})
             print(f"  ✅ Loaded {len(self.train_docs)} train / "
-                  f"{len(self.test_docs)} test from cache")
+                  f"{len(self.val_docs)} val / {len(self.test_docs)} test from cache")
             return
 
         # ── 加载数据 ──
@@ -787,20 +807,16 @@ class MatbenchLoader:
             print(f"  ⚡ Ewald coverage: {n_ewald}/{len(docs)} "
                   f"({100*n_ewald/len(docs):.1f}%)")
 
-        # ── Train/Test split ──
-        # ⚠️ 待修:此处用 sklearn.train_test_split 做 random split,
-        # 不是 Matbench 官方 5-fold 协议(MatbenchBenchmark)。train.py 同时把
-        # 这个 test_docs 当 validation 用于早停(train.py:436-444),validation
-        # 信息已"泄漏"给了模型选择,所以 leaderboard 数字(如 0.188 eV)不能
-        # 直接对比官方结果。修复方向:接入 matbench.bench.MatbenchBenchmark,
-        # 按 task.get_train_and_val_data(fold) 拿固定 fold;另留独立 val split 做早停。
-        from sklearn.model_selection import train_test_split
-        train_docs, test_docs = train_test_split(
-            docs, test_size=test_ratio, random_state=seed
+        # ── Train/Val/Test split ──
+        self._split_docs(
+            df=df,
+            docs=docs,
+            target_col=target_col,
+            test_ratio=test_ratio,
+            seed=seed,
         )
-        self.train_docs = train_docs
-        self.test_docs = test_docs
-        print(f"  📊 Split: {len(train_docs)} train / {len(test_docs)} test")
+        print(f"  📊 Split: {len(self.train_docs)} train / "
+              f"{len(self.val_docs)} val / {len(self.test_docs)} test")
 
         # ── 统计 ──
         n_sites = [len(d["sites"]) for d in docs if "sites" in d]
@@ -820,7 +836,9 @@ class MatbenchLoader:
                     add_spacegroup, add_nn_stats, add_density,
                     add_comp_nn,
                     add_comp_ewald_stats, add_comp_nn_stats,
-                    add_mean_bonds, seed):
+                    add_mean_bonds, seed,
+                    split_strategy, fold, val_ratio, test_ratio,
+                    include_test_targets):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
         import pathlib
         cache_dir = pathlib.Path(__file__).parent / "cache"
@@ -838,7 +856,83 @@ class MatbenchLoader:
         cewalds_tag = "_cewalds" if add_comp_ewald_stats else ""
         cnns_tag = "_cnns" if add_comp_nn_stats else ""
         mbonds_tag = "_mbonds" if add_mean_bonds else ""
-        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{dropcoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}_seed{seed}.pkl"
+        if split_strategy == "official":
+            split_tag = f"_official_f{fold}_val{val_ratio:g}"
+        elif split_strategy == "random":
+            split_tag = f"_random_test{test_ratio:g}"
+        else:
+            raise ValueError(f"Unknown split_strategy={split_strategy!r}")
+        test_target_tag = "_testtargets" if include_test_targets else "_blindtest"
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{dropcoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}{split_tag}{test_target_tag}_seed{seed}.pkl"
+
+    def _split_docs(self, df, docs, target_col, test_ratio: float, seed: int):
+        """Populate train_docs/val_docs/test_docs with no test leakage."""
+        doc_by_id = dict(zip(df.index, docs))
+        target_by_id = df[target_col]
+
+        if self.split_strategy == "official":
+            train_val_ids, test_ids, fold_key = official_fold_ids(
+                self.task_name,
+                self.fold,
+            )
+            train_val_ids = coerce_ids_to_index_type(train_val_ids, df.index)
+            test_ids = coerce_ids_to_index_type(test_ids, df.index)
+            train_ids, val_ids = split_internal_train_val(
+                train_val_ids,
+                targets_by_id=target_by_id,
+                val_ratio=self.val_ratio,
+                seed=seed,
+            )
+            self.split_metadata = {
+                "strategy": "official",
+                "fold": self.fold,
+                "fold_key": fold_key,
+                "val_ratio": self.val_ratio,
+                "seed": seed,
+            }
+        elif self.split_strategy == "random":
+            from sklearn.model_selection import train_test_split
+
+            train_val_ids, test_ids = train_test_split(
+                list(df.index), test_size=test_ratio, random_state=seed
+            )
+            train_ids, val_ids = split_internal_train_val(
+                train_val_ids,
+                targets_by_id=target_by_id,
+                val_ratio=self.val_ratio,
+                seed=seed,
+            )
+            self.split_metadata = {
+                "strategy": "random",
+                "test_ratio": test_ratio,
+                "val_ratio": self.val_ratio,
+                "seed": seed,
+            }
+        else:
+            raise ValueError(f"Unknown split_strategy={self.split_strategy!r}")
+
+        overlap_train_val = set(train_ids) & set(val_ids)
+        overlap_train_test = set(train_ids) & set(test_ids)
+        overlap_val_test = set(val_ids) & set(test_ids)
+        if overlap_train_val or overlap_train_test or overlap_val_test:
+            raise RuntimeError(
+                "Split leakage detected: "
+                f"train∩val={len(overlap_train_val)}, "
+                f"train∩test={len(overlap_train_test)}, "
+                f"val∩test={len(overlap_val_test)}"
+            )
+
+        self.train_docs = [doc_by_id[i] for i in train_ids]
+        self.val_docs = [doc_by_id[i] for i in val_ids]
+        self.test_docs = [doc_by_id[i] for i in test_ids]
+        if not self.include_test_targets:
+            self.test_docs = [
+                {k: v for k, v in doc.items() if k != self.target_key}
+                for doc in self.test_docs
+            ]
+            self.split_metadata["test_targets"] = "omitted"
+        else:
+            self.split_metadata["test_targets"] = "included"
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
@@ -846,7 +940,9 @@ class MatbenchLoader:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "train_docs": self.train_docs,
+            "val_docs": self.val_docs,
             "test_docs": self.test_docs,
+            "split_metadata": getattr(self, "split_metadata", {}),
         }
         with open(cache_path, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -855,9 +951,14 @@ class MatbenchLoader:
 
     @staticmethod
     def _load_task(task_name: str) -> pd.DataFrame:
-        """通过 matminer 加载 Matbench 数据集。"""
+        """通过 matminer 加载 Matbench 数据集，并对齐官方 Matbench mbid index。"""
         from matminer.datasets import load_dataset
-        return load_dataset(task_name)
+        df = load_dataset(task_name)
+        id_n_zeros = math.floor(math.log(df.shape[0], 10)) + 1
+        prefix = task_name.replace("matbench", "mb").replace("_", "-")
+        df = df.copy()
+        df["mbid"] = [f"{prefix}-{i + 1:0{id_n_zeros}d}" for i in df.index]
+        return df.set_index("mbid")
 
     @staticmethod
     def _find_structure_col(df: pd.DataFrame) -> str:
