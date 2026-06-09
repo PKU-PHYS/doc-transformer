@@ -46,6 +46,8 @@ class ModelConfig:
     loss_compression_scale: float = 1.0
     # 压缩空间中的逐样本数值 loss: "huber" 保持历史默认, "l1" 直接对齐 MAE
     numeric_loss: str = "huber"
+    # Huber loss 的 L1/L2 转折点；仅 numeric_loss="huber" 时生效
+    numeric_huber_delta: float = 1.0
     # 数值输出约束：
     #   "linear": 无约束，适用于一般回归
     #   "softplus": 非负输出，适用于 band gap 等物理非负目标

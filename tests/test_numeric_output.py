@@ -41,6 +41,19 @@ class NumericOutputTest(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(loss))
 
+    def test_numeric_huber_delta_changes_loss(self):
+        out = torch.zeros(1, 1, ModelConfig().d_model)
+
+        small_delta = ModelConfig(numeric_loss="huber", numeric_huber_delta=0.25)
+        small_model = DocumentTransformer(small_delta, _DummyFrozenLM())
+        small_loss = small_model.compute_loss(out, [[object()]], [{0: (3.0, "number")}])
+
+        large_delta = ModelConfig(numeric_loss="huber", numeric_huber_delta=2.0)
+        large_model = DocumentTransformer(large_delta, _DummyFrozenLM())
+        large_loss = large_model.compute_loss(out, [[object()]], [{0: (3.0, "number")}])
+
+        self.assertNotAlmostEqual(float(small_loss.detach()), float(large_loss.detach()))
+
     def test_unknown_numeric_loss_raises(self):
         config = ModelConfig(numeric_loss="bogus")
         model = DocumentTransformer(config, _DummyFrozenLM())

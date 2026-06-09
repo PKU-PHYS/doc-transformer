@@ -131,6 +131,7 @@ class DocumentTransformer(nn.Module):
                 per_sample = F.huber_loss(
                     pred_loss_space,
                     true_loss_space,
+                    delta=self.config.numeric_huber_delta,
                     reduction='none')
             elif self.config.numeric_loss == "l1":
                 per_sample = F.l1_loss(
