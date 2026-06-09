@@ -11,6 +11,18 @@ import time
 import torch
 
 
+def apply_numeric_postprocessing(pred_val, config):
+    """Apply configured scalar postprocessing to numeric predictions."""
+    pred_val = pred_val + getattr(config, "prediction_bias", 0.0)
+    prediction_min_value = getattr(config, "prediction_min_value", None)
+    if prediction_min_value is not None:
+        pred_val = max(pred_val, prediction_min_value)
+    prediction_zero_threshold = getattr(config, "prediction_zero_threshold", None)
+    if prediction_zero_threshold is not None and pred_val <= prediction_zero_threshold:
+        pred_val = 0.0
+    return pred_val
+
+
 def evaluate(model, test_loader, device, metric="mae"):
     """
     在 test set 上评估模型。
@@ -60,16 +72,13 @@ def evaluate(model, test_loader, device, metric="mae"):
                             pred_val = model.decode_head.predict_number(mask_repr).item()
                             true_float = float(true_val)
 
+                            pred_val = apply_numeric_postprocessing(pred_val, model.config)
+
                             # 零值分类头：logit > 0 (sigmoid > 0.5) → 直接输出 0
                             if model.config.use_zero_head:
                                 zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
                                 if zero_logit > 0:
                                     pred_val = 0.0
-                            prediction_min_value = getattr(
-                                model.config, "prediction_min_value", None
-                            )
-                            if prediction_min_value is not None:
-                                pred_val = max(pred_val, prediction_min_value)
 
                             if metric == "mae":
                                 errors.append(abs(pred_val - true_float))

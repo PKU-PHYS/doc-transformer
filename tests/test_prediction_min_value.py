@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from eval import evaluate
+from eval import apply_numeric_postprocessing, evaluate
 
 
 class _ConstantNumberHead:
@@ -18,7 +18,9 @@ class _ConstantModel(torch.nn.Module):
     def __init__(self, value, prediction_min_value):
         super().__init__()
         self.config = SimpleNamespace(
+            prediction_bias=0.0,
             prediction_min_value=prediction_min_value,
+            prediction_zero_threshold=None,
             use_zero_head=False,
         )
         self.decode_head = _ConstantNumberHead(value)
@@ -47,6 +49,16 @@ class PredictionMinValueTest(unittest.TestCase):
         model = _ConstantModel(value=-0.25, prediction_min_value=0.0)
         score = evaluate(model, _single_number_batch(0.0), "cpu", metric="mae")
         self.assertAlmostEqual(score, 0.0)
+
+    def test_postprocessing_order_is_bias_min_then_zero_threshold(self):
+        config = SimpleNamespace(
+            prediction_bias=-0.2,
+            prediction_min_value=0.0,
+            prediction_zero_threshold=0.15,
+        )
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.4, config), 0.2)
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.25, config), 0.0)
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.1, config), 0.0)
 
 
 if __name__ == "__main__":
