@@ -65,6 +65,11 @@ def evaluate(model, test_loader, device, metric="mae"):
                                 zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
                                 if zero_logit > 0:
                                     pred_val = 0.0
+                            prediction_min_value = getattr(
+                                model.config, "prediction_min_value", None
+                            )
+                            if prediction_min_value is not None:
+                                pred_val = max(pred_val, prediction_min_value)
 
                             if metric == "mae":
                                 errors.append(abs(pred_val - true_float))

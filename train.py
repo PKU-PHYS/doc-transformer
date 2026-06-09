@@ -643,6 +643,8 @@ def main():
                         help="Override ModelConfig.numeric_output")
     parser.add_argument("--numeric-softplus-beta", type=float, default=None,
                         help="Override ModelConfig.numeric_softplus_beta")
+    parser.add_argument("--prediction-min-value", type=float, default=None,
+                        help="Clamp numeric predictions to this minimum during evaluation/inference")
     parser.add_argument("--use-zero-head", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Enable numeric zero auxiliary/classification head")
@@ -684,6 +686,8 @@ def main():
         model_config.numeric_output = args.numeric_output
     if args.numeric_softplus_beta is not None:
         model_config.numeric_softplus_beta = args.numeric_softplus_beta
+    if args.prediction_min_value is not None:
+        model_config.prediction_min_value = args.prediction_min_value
     if args.use_zero_head is not None:
         model_config.use_zero_head = args.use_zero_head
     if args.zero_threshold is not None:
@@ -715,6 +719,7 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"output={model_config.numeric_output}, "
+              f"pred_min={model_config.prediction_min_value}, "
               f"zero_head={model_config.use_zero_head}")
         print(f"Matbench task: {args.dataset} — {mb_config.description}")
         print(f"Eval metric: {eval_metric.upper()}")
@@ -756,6 +761,7 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"output={model_config.numeric_output}, "
+              f"pred_min={model_config.prediction_min_value}, "
               f"zero_head={model_config.use_zero_head}")
         print(f"Dataset config: n_rows={ds_config.n_rows}, "
               f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
@@ -854,6 +860,7 @@ def main():
         f"loss_compression_scale={model_config.loss_compression_scale}, "
         f"numeric_output={model_config.numeric_output}, "
         f"numeric_softplus_beta={model_config.numeric_softplus_beta}, "
+        f"prediction_min_value={model_config.prediction_min_value}, "
         f"use_zero_head={model_config.use_zero_head}, "
         f"zero_threshold={model_config.zero_threshold}, "
         f"zero_neg_weight={model_config.zero_neg_weight}",

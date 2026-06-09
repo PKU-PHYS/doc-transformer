@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -46,6 +47,8 @@ class ModelConfig:
     #   "softplus": 非负输出，适用于 band gap 等物理非负目标
     numeric_output: str = "linear"
     numeric_softplus_beta: float = 1.0
+    # 验证/推理阶段的数值下界；None 表示不裁剪，band gap 可显式设为 0.0
+    prediction_min_value: Optional[float] = None
     
     # ── 零值分类头 ──
     use_zero_head: bool = False     # 是否启用零值分类头
