@@ -269,6 +269,58 @@ Result:
 Density/volume features were not competitive with the current base feature
 recipe under this schedule.
 
+## Shared JSON Structural Biases
+
+Commit:
+
+`642fb4e feat: add shared json structural biases`
+
+Run directory:
+
+`checkpoints/20260610_002848_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --bias-same-parent --bias-shared-group-depth
+```
+
+This adds two general JSON structural attention-bias signals:
+
+- `same_parent`: sibling leaves under the same JSON object/list instance.
+- `shared_group_depth`: number of shared array-instance ancestors.
+
+Result:
+
+- Best raw internal-val MAE: `0.19670155086126112`
+- Best raw epoch: `43`
+- Final epoch raw internal-val MAE: `0.1973`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9808620689655173`
+- `prediction_bias`: `-0.0033167513069728843`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.11`
+- Train raw MAE: `0.07995345388770221`
+- Train calibrated MAE: `0.06997571399168996`
+- Internal-val raw MAE: `0.196717696954291`
+- Internal-val calibrated MAE: `0.19023055898414332`
+
+Conclusion: this general bias pair is close to the 50-epoch base-feature run,
+but does not beat the current clean best (`0.18526953161707985` calibrated
+internal-val MAE). The next useful ablation is to enable only one of the two new
+signals at a time, starting with `same_parent`, because the paired signal may
+add redundant or conflicting attention priors.
+
 ## Notes
 
 - These are not final official Matbench test results.

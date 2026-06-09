@@ -121,6 +121,28 @@ def _fit_zero_threshold(preds, targets):
     return best_threshold, best_mae
 
 
+def _load_run_metadata_for_checkpoint(checkpoint_path):
+    metadata_path = pathlib.Path(checkpoint_path).with_name("run_metadata.json")
+    if not metadata_path.exists():
+        return {}
+    with metadata_path.open() as f:
+        return json.load(f)
+
+
+def _apply_architecture_metadata(model_config, metadata):
+    """Restore config fields that change checkpoint parameter shapes."""
+    saved_model_config = metadata.get("model_config", {})
+    for key in (
+        "bias_is_group_fork",
+        "bias_first_diff",
+        "bias_tree_dist",
+        "bias_same_parent",
+        "bias_shared_group_depth",
+    ):
+        if key in saved_model_config:
+            setattr(model_config, key, saved_model_config[key])
+
+
 def _summarize_split_with_scale(raw_preds, targets, *, scale, bias, min_value, zero_threshold):
     clipped = _postprocess_array(raw_preds, min_value=min_value)
     scale_bias_clipped = _postprocess_array(
@@ -173,7 +195,9 @@ def main():
     if args.dataset != "matbench_mp_gap":
         raise ValueError("This calibration script is currently specialized for matbench_mp_gap")
 
+    metadata = _load_run_metadata_for_checkpoint(args.checkpoint)
     model_config, _ = get_configs(args.model_size)
+    _apply_architecture_metadata(model_config, metadata)
     model_config.loss_compression_scale = args.loss_compression_scale
     model_config.numeric_output = "linear"
     model_config.use_zero_head = False
@@ -273,6 +297,8 @@ def main():
             "loader_metadata": mb_loader.split_metadata,
         },
         "dataset_options": dataset_options,
+        "run_metadata_path": str(pathlib.Path(args.checkpoint).with_name("run_metadata.json"))
+        if metadata else None,
         "fit_policy": {
             "scale": "grid search on train MAE after median-bias and min clamp",
             "bias": "median(target - scale * prediction) on official train-only subset",
