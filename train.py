@@ -357,6 +357,8 @@ def train_stage(
         "losses": [],
         "epoch_times": [],
         "best_loss": best_loss,
+        "best_val_metric": float("inf"),
+        "best_val_epoch": 0,
         "stopped_at_epoch": 0,
         "reason": "",
     }
@@ -488,6 +490,22 @@ def train_stage(
             stage_log.setdefault(val_metric_name, []).append(val_score)
             if writer is not None:
                 writer.add_scalar(f"{stage_name}/{val_metric_name}", val_score, epoch + 1)
+            if val_score < stage_log["best_val_metric"]:
+                stage_log["best_val_metric"] = val_score
+                stage_log["best_val_epoch"] = epoch + 1
+                save_checkpoint(
+                    model,
+                    f"{stage_name}_best_val",
+                    checkpoint_dir,
+                    log=stage_log,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    epoch=epoch + 1,
+                    best_loss=best_loss,
+                    stage_name=stage_name,
+                    global_step=global_step,
+                )
 
         # ── Test 评估（必须显式 --eval-test,避免调参泄漏）──
         test_score = None
