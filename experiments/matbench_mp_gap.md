@@ -405,6 +405,49 @@ Conclusion: the low-LR warm restart improves the same-parent ablation over its
 50-epoch checkpoint, but it still does not beat the current best base-feature
 low-LR warm restart (`0.18526953161707985` calibrated internal-val MAE).
 
+## Shared-Group-Depth Structural Bias Ablation
+
+Run directory:
+
+`checkpoints/20260610_015714_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --bias-shared-group-depth
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19571158876236153`
+- Best raw epoch: `47`
+- Final epoch raw internal-val MAE: `0.1959`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9768965517241379`
+- `prediction_bias`: `-0.0014718137870960194`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.116`
+- Train raw MAE: `0.07928337416675008`
+- Train calibrated MAE: `0.06691746980746403`
+- Internal-val raw MAE: `0.19571158876236153`
+- Internal-val calibrated MAE: `0.18878109177362704`
+
+Conclusion: `shared_group_depth` alone is roughly comparable to the 50-epoch
+base-feature run, but it is weaker than the `same_parent` ablation and does not
+beat the current best. The paired shared-bias result is therefore not hiding a
+useful `shared_group_depth` effect; the next structural-bias work should keep
+`same_parent` as the only promising added signal.
+
 ## Notes
 
 - These are not final official Matbench test results.
