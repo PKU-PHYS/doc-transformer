@@ -13,15 +13,25 @@ class _ConstantNumberHead:
     def predict_number(self, mask_repr):
         return torch.full((mask_repr.shape[0],), self.value, device=mask_repr.device)
 
+    def predict_is_zero(self, mask_repr):
+        return torch.full((mask_repr.shape[0],), 0.5, device=mask_repr.device)
+
 
 class _ConstantModel(torch.nn.Module):
-    def __init__(self, value, prediction_min_value):
+    def __init__(
+        self,
+        value,
+        prediction_min_value,
+        use_zero_head=False,
+        zero_logit_threshold=0.0,
+    ):
         super().__init__()
         self.config = SimpleNamespace(
             prediction_bias=0.0,
             prediction_min_value=prediction_min_value,
             prediction_zero_threshold=None,
-            use_zero_head=False,
+            use_zero_head=use_zero_head,
+            zero_logit_threshold=zero_logit_threshold,
         )
         self.decode_head = _ConstantNumberHead(value)
 
@@ -59,6 +69,20 @@ class PredictionMinValueTest(unittest.TestCase):
         self.assertAlmostEqual(apply_numeric_postprocessing(0.4, config), 0.2)
         self.assertAlmostEqual(apply_numeric_postprocessing(0.25, config), 0.0)
         self.assertAlmostEqual(apply_numeric_postprocessing(0.1, config), 0.0)
+
+    def test_zero_head_threshold_can_gate_zero_prediction(self):
+        model = _ConstantModel(
+            value=1.0,
+            prediction_min_value=None,
+            use_zero_head=True,
+            zero_logit_threshold=0.0,
+        )
+        score = evaluate(model, _single_number_batch(0.0), "cpu", metric="mae")
+        self.assertAlmostEqual(score, 0.0)
+
+        model.config.zero_logit_threshold = 1.0
+        score = evaluate(model, _single_number_batch(0.0), "cpu", metric="mae")
+        self.assertAlmostEqual(score, 1.0)
 
 
 if __name__ == "__main__":

@@ -654,6 +654,8 @@ def main():
                         help="Enable numeric zero auxiliary/classification head")
     parser.add_argument("--zero-threshold", type=float, default=None,
                         help="Override ModelConfig.zero_threshold")
+    parser.add_argument("--zero-logit-threshold", type=float, default=None,
+                        help="Override ModelConfig.zero_logit_threshold")
     parser.add_argument("--zero-neg-weight", type=float, default=None,
                         help="Override ModelConfig.zero_neg_weight")
     parser.add_argument("--max-epochs", type=int, default=None,
@@ -700,6 +702,8 @@ def main():
         model_config.use_zero_head = args.use_zero_head
     if args.zero_threshold is not None:
         model_config.zero_threshold = args.zero_threshold
+    if args.zero_logit_threshold is not None:
+        model_config.zero_logit_threshold = args.zero_logit_threshold
     if args.zero_neg_weight is not None:
         model_config.zero_neg_weight = args.zero_neg_weight
     print(f"  📐 Model preset: {args.model_size}")
@@ -730,7 +734,8 @@ def main():
               f"pred_bias={model_config.prediction_bias}, "
               f"pred_min={model_config.prediction_min_value}, "
               f"pred_zero={model_config.prediction_zero_threshold}, "
-              f"zero_head={model_config.use_zero_head}")
+              f"zero_head={model_config.use_zero_head}, "
+              f"zero_logit_threshold={model_config.zero_logit_threshold}")
         print(f"Matbench task: {args.dataset} — {mb_config.description}")
         print(f"Eval metric: {eval_metric.upper()}")
         if dataset_options:
@@ -774,7 +779,8 @@ def main():
               f"pred_bias={model_config.prediction_bias}, "
               f"pred_min={model_config.prediction_min_value}, "
               f"pred_zero={model_config.prediction_zero_threshold}, "
-              f"zero_head={model_config.use_zero_head}")
+              f"zero_head={model_config.use_zero_head}, "
+              f"zero_logit_threshold={model_config.zero_logit_threshold}")
         print(f"Dataset config: n_rows={ds_config.n_rows}, "
               f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
 
@@ -876,6 +882,7 @@ def main():
         f"prediction_min_value={model_config.prediction_min_value}, "
         f"prediction_zero_threshold={model_config.prediction_zero_threshold}, "
         f"use_zero_head={model_config.use_zero_head}, "
+        f"zero_logit_threshold={model_config.zero_logit_threshold}, "
         f"zero_threshold={model_config.zero_threshold}, "
         f"zero_neg_weight={model_config.zero_neg_weight}",
     )
