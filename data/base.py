@@ -19,12 +19,14 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
                                     is_group: torch.Tensor,
                                     valid_path_lens: torch.Tensor) -> Dict[str, torch.Tensor]:
     """
-    计算三个结构关系信号，衡量两个叶子在 JSON 树中的拓扑关系。
+    计算结构关系信号，衡量两个叶子在 JSON 树中的拓扑关系。
 
     对于每对叶子 (i, j)：
       - is_group_fork: 分叉点是否在 group（数组 instance）层
       - first_diff:    路径首次不同的位置索引（共同前缀长度）
       - tree_dist:     两叶子到 LCA 的步数之和
+      - same_parent:   是否为同一个 JSON object/list instance 下的 sibling leaf
+      - shared_group_depth: 共享的数组 instance 祖先数量
 
     Args:
         path_ids:        (B, T, D) 每个叶子的路径 ID 序列
@@ -36,6 +38,8 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
           "is_group_fork": 分叉点是否在 group 层（布尔→0/1）
           "first_diff":    路径首次不同的位置索引
           "tree_dist":     两叶子到 LCA 的步数之和
+          "same_parent":   同父 leaf（布尔→0/1）
+          "shared_group_depth": 共同数组 instance 祖先数量
     """
     B, T, D = path_ids.shape
 
@@ -72,10 +76,50 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
     # tree_dist = (L_i - first_diff) + (L_j - first_diff) = L_i + L_j - 2 * first_diff
     tree_dist = (len_i_2d + len_j_2d - 2 * first_diff.long()).to(torch.int8)
 
+    # ── Bias 4: same_parent ──
+    # 同一个父 object / array instance 下的 sibling leaf。对角线不算 sibling。
+    same_len = len_i_2d == len_j_2d
+    same_parent = (
+        ~all_match
+        & same_len
+        & (len_i_2d > 1)
+        & (first_diff.long() == (len_i_2d - 1))
+    ).to(torch.int8)
+
+    # ── Bias 5: shared_group_depth ──
+    # 共享的数组 instance 祖先数量：同一 table row / composition item / site
+    # 会得到更高值；无数组祖先的普通 dict 字段为 0。
+    group_mask = is_group.bool()
+    group_pos = group_mask.long().cumsum(dim=-1) - 1
+    compact_groups = torch.zeros_like(path_ids)
+    compact_groups.scatter_add_(
+        2,
+        group_pos.clamp_min(0),
+        torch.where(group_mask, path_ids, torch.zeros_like(path_ids)),
+    )
+    group_lens = group_mask.long().sum(dim=-1)
+    groups_i = compact_groups.unsqueeze(2).expand(B, T, T, D)
+    groups_j = compact_groups.unsqueeze(1).expand(B, T, T, D)
+    group_depth_idx = torch.arange(D, device=path_ids.device).view(1, 1, 1, D)
+    group_len_i = group_lens.unsqueeze(2).unsqueeze(3)
+    group_len_j = group_lens.unsqueeze(1).unsqueeze(3)
+    group_min_len = torch.minimum(group_len_i, group_len_j)
+    group_valid = group_depth_idx < group_min_len
+    group_effective_match = (groups_i == groups_j) | ~group_valid
+    group_all_match = group_effective_match.all(dim=-1)
+    group_first_diff = group_effective_match.long().argmin(dim=-1)
+    shared_group_depth = torch.where(
+        group_all_match,
+        group_min_len.squeeze(-1),
+        group_first_diff,
+    ).to(torch.int8)
+
     return {
         "is_group_fork": is_group_fork,
         "first_diff": first_diff,
         "tree_dist": tree_dist,
+        "same_parent": same_parent,
+        "shared_group_depth": shared_group_depth,
     }
 
 
@@ -98,6 +142,8 @@ def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Te
             "is_group_fork": torch.zeros(0, 0, dtype=torch.int8),
             "first_diff": torch.zeros(0, 0, dtype=torch.int8),
             "tree_dist": torch.zeros(0, 0, dtype=torch.int8),
+            "same_parent": torch.zeros(0, 0, dtype=torch.int8),
+            "shared_group_depth": torch.zeros(0, 0, dtype=torch.int8),
         }
 
     max_path_len = max(len(l.path_ids) for l in leaves)
@@ -106,6 +152,8 @@ def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Te
             "is_group_fork": torch.zeros(T, T, dtype=torch.int8),
             "first_diff": torch.zeros(T, T, dtype=torch.int8),
             "tree_dist": torch.zeros(T, T, dtype=torch.int8),
+            "same_parent": torch.zeros(T, T, dtype=torch.int8),
+            "shared_group_depth": torch.zeros(T, T, dtype=torch.int8),
         }
 
     path_ids = torch.zeros(1, T, max_path_len, dtype=torch.long)

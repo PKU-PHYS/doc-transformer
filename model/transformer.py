@@ -74,6 +74,8 @@ class StructuralBiasEncoder(nn.Module):
         """
         total = None
         for name, value in signals.items():
+            if name not in self._encoders:
+                continue
             if not self._enabled.get(name, True):
                 continue
             module = self._encoders[name]
@@ -113,10 +115,18 @@ class GlobalTransformer(nn.Module):
         self.bias_encoder.register_category("is_group_fork", num_classes=2)
         self.bias_encoder.register_continuous("first_diff")
         self.bias_encoder.register_continuous("tree_dist")
+        if config.bias_same_parent:
+            self.bias_encoder.register_category("same_parent", num_classes=2)
+        if config.bias_shared_group_depth:
+            self.bias_encoder.register_continuous("shared_group_depth")
         # Apply config-driven enable flags
         self.bias_encoder.set_enabled("is_group_fork", config.bias_is_group_fork)
         self.bias_encoder.set_enabled("first_diff", config.bias_first_diff)
         self.bias_encoder.set_enabled("tree_dist", config.bias_tree_dist)
+        if config.bias_same_parent:
+            self.bias_encoder.set_enabled("same_parent", True)
+        if config.bias_shared_group_depth:
+            self.bias_encoder.set_enabled("shared_group_depth", True)
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.d_model,

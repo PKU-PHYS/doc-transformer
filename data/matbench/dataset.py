@@ -62,6 +62,10 @@ class MatbenchDataset(Dataset):
             self._all_structural_bias = cached["all_structural_bias"]
             self._n_truncated = cached["n_truncated"]
             print(f"    ✅ {len(self._all_leaves)} samples loaded from cache")
+            if self._structural_bias_cache_missing_signals():
+                print("    🔁 Cached structural bias is missing new signals; recomputing")
+                self._precompute_structural_bias()
+                self._save_cache(cache_path)
         else:
             # ── 预解析所有文档 ──
             print(f"    ⏳ Pre-parsing {len(docs)} documents...")
@@ -156,6 +160,14 @@ class MatbenchDataset(Dataset):
             for sb in self._all_structural_bias
         )
         print(f"    ✅ Structural bias precomputed ({total_bytes / 1024 / 1024:.1f} MB in memory)")
+
+    def _structural_bias_cache_missing_signals(self) -> bool:
+        """旧缓存可能只有早期三路 bias；缺信号时用已缓存 leaves 重新生成。"""
+        if not self._all_structural_bias:
+            return True
+        expected = set(compute_single_structural_bias([]).keys())
+        sample = self._all_structural_bias[: min(128, len(self._all_structural_bias))]
+        return any(set(sb.keys()) != expected for sb in sample)
 
     def _save_cache(self, cache_path):
         """保存解析结果和 fork_bias 到磁盘缓存。"""

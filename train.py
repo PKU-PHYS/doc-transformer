@@ -639,6 +639,12 @@ def main():
                         help="Override TrainConfig.lr")
     parser.add_argument("--structural-bias-lr-mult", type=float, default=None,
                         help="Override TrainConfig.structural_bias_lr_mult")
+    parser.add_argument("--bias-same-parent", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Enable structural bias for sibling leaves with the same parent")
+    parser.add_argument("--bias-shared-group-depth", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Enable structural bias for shared array-instance ancestors")
     parser.add_argument("--max-cpu-workers", type=int, default=None,
                         help="Override TrainConfig.max_cpu_workers")
     parser.add_argument("--loss-exponent-min", type=int, default=None,
@@ -693,6 +699,10 @@ def main():
         train_config.lr = args.lr
     if args.structural_bias_lr_mult is not None:
         train_config.structural_bias_lr_mult = args.structural_bias_lr_mult
+    if args.bias_same_parent is not None:
+        model_config.bias_same_parent = args.bias_same_parent
+    if args.bias_shared_group_depth is not None:
+        model_config.bias_shared_group_depth = args.bias_shared_group_depth
     if args.max_cpu_workers is not None:
         train_config.max_cpu_workers = args.max_cpu_workers
     if args.loss_exponent_min is not None:
@@ -744,6 +754,11 @@ def main():
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
               f"bias_lr_mult={train_config.structural_bias_lr_mult}")
+        print(f"Structural bias: group_fork={model_config.bias_is_group_fork}, "
+              f"first_diff={model_config.bias_first_diff}, "
+              f"tree_dist={model_config.bias_tree_dist}, "
+              f"same_parent={model_config.bias_same_parent}, "
+              f"shared_group_depth={model_config.bias_shared_group_depth}")
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
@@ -790,6 +805,11 @@ def main():
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
               f"bias_lr_mult={train_config.structural_bias_lr_mult}")
+        print(f"Structural bias: group_fork={model_config.bias_is_group_fork}, "
+              f"first_diff={model_config.bias_first_diff}, "
+              f"tree_dist={model_config.bias_tree_dist}, "
+              f"same_parent={model_config.bias_same_parent}, "
+              f"shared_group_depth={model_config.bias_shared_group_depth}")
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
@@ -889,6 +909,14 @@ def main():
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
                      f"bias_lr_mult={train_config.structural_bias_lr_mult}, "
                      f"dataset={args.dataset}")
+    writer.add_text(
+        "config/structural_bias",
+        f"is_group_fork={model_config.bias_is_group_fork}, "
+        f"first_diff={model_config.bias_first_diff}, "
+        f"tree_dist={model_config.bias_tree_dist}, "
+        f"same_parent={model_config.bias_same_parent}, "
+        f"shared_group_depth={model_config.bias_shared_group_depth}",
+    )
     writer.add_text(
         "config/numeric_loss",
         f"loss_exponent_min={model_config.loss_exponent_min}, "

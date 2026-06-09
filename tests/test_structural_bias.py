@@ -1,4 +1,4 @@
-"""Structural bias 测试 — 验证三信号系统的正确性。
+"""Structural bias 测试 — 验证结构关系信号系统的正确性。
 
 覆盖:
   - bias.md §3.1 对照表的取值验证
@@ -50,6 +50,8 @@ class StructuralBiasValueTests(unittest.TestCase):
         self.assertEqual(b["is_group_fork"][0, 1].item(), 0)
         self.assertEqual(b["first_diff"][0, 1].item(), 2)
         self.assertEqual(b["tree_dist"][0, 1].item(), 2)
+        self.assertEqual(b["same_parent"][0, 1].item(), 1)
+        self.assertEqual(b["shared_group_depth"][0, 1].item(), 0)
 
     def test_different_parent_dict_keys(self):
         """lattice.a vs density → is_group_fork=0, first_diff=1, tree_dist=3"""
@@ -58,6 +60,7 @@ class StructuralBiasValueTests(unittest.TestCase):
         self.assertEqual(b["is_group_fork"][0, 2].item(), 0)
         self.assertEqual(b["first_diff"][0, 2].item(), 1)
         self.assertEqual(b["tree_dist"][0, 2].item(), 3)
+        self.assertEqual(b["same_parent"][0, 2].item(), 0)
 
     def test_tree_dist_distinguishes_same_vs_different_parent(self):
         """Bias 3 能区分 first_diff 相同但拓扑不同的 pair。
@@ -108,6 +111,41 @@ class StructuralBiasGroupTests(unittest.TestCase):
         unique = set(self.bias["first_diff"].flatten().tolist())
         self.assertGreater(len(unique), 2)
 
+    def test_shared_group_depth_tracks_common_array_instances(self):
+        """同 material 不同 site 共享 1 层 group；跨 material 为 0。"""
+        self.assertEqual(self.bias["shared_group_depth"][0, 1].item(), 1)
+        self.assertEqual(self.bias["shared_group_depth"][0, 2].item(), 0)
+
+    def test_different_site_is_not_same_parent(self):
+        """不同 array instance 下的同名 leaf 不是同父 sibling。"""
+        self.assertEqual(self.bias["same_parent"][0, 1].item(), 0)
+        self.assertEqual(self.bias["same_parent"][0, 2].item(), 0)
+
+
+class StructuralBiasNestedGroupTests(unittest.TestCase):
+    """验证同一嵌套 array instance 内多个字段的关系。"""
+
+    def setUp(self):
+        doc = {
+            "materials": [
+                {"sites": [{"x": 1.0, "y": 2.0}, {"x": 3.0, "y": 4.0}]},
+                {"sites": [{"x": 5.0, "y": 6.0}]},
+            ]
+        }
+        self.leaves = _parse(doc)
+        self.bias = compute_single_structural_bias(self.leaves)
+
+    def test_same_site_fields_share_parent_and_two_groups(self):
+        self.assertEqual(self.bias["same_parent"][0, 1].item(), 1)
+        self.assertEqual(self.bias["shared_group_depth"][0, 1].item(), 2)
+
+    def test_same_material_different_sites_share_one_group(self):
+        self.assertEqual(self.bias["same_parent"][0, 2].item(), 0)
+        self.assertEqual(self.bias["shared_group_depth"][0, 2].item(), 1)
+
+    def test_different_materials_share_no_group(self):
+        self.assertEqual(self.bias["shared_group_depth"][0, 4].item(), 0)
+
 
 class StructuralBiasDiagonalTests(unittest.TestCase):
     """对角线和基本性质测试。"""
@@ -125,6 +163,11 @@ class StructuralBiasDiagonalTests(unittest.TestCase):
     def test_diagonal_tree_dist_zero(self):
         """对角线 → tree_dist=0"""
         diag = torch.diagonal(self.bias["tree_dist"])
+        self.assertTrue(torch.all(diag == 0))
+
+    def test_diagonal_same_parent_zero(self):
+        """对角线不是 sibling pair。"""
+        diag = torch.diagonal(self.bias["same_parent"])
         self.assertTrue(torch.all(diag == 0))
 
     def test_diagonal_first_diff_equals_path_len(self):
@@ -239,6 +282,18 @@ class StructuralBiasEncoderTests(unittest.TestCase):
         self.encoder.set_enabled("is_group_fork", True)
         self.encoder.set_enabled("first_diff", True)
         self.encoder.set_enabled("tree_dist", True)
+
+    def test_unregistered_signal_is_ignored(self):
+        """缓存里多出的新信号不应破坏旧/消融配置。"""
+        B, T = 1, 3
+        signals = {
+            "is_group_fork": torch.zeros(B, T, T, dtype=torch.long),
+            "first_diff": torch.zeros(B, T, T, dtype=torch.long),
+            "tree_dist": torch.zeros(B, T, T, dtype=torch.long),
+            "same_parent": torch.ones(B, T, T, dtype=torch.long),
+        }
+        out = self.encoder(**signals)
+        self.assertEqual(out.shape, (B * 4, T, T))
 
 
 if __name__ == "__main__":
