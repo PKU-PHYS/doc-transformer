@@ -495,6 +495,54 @@ the nonzero band-gap regression enough that calibration cannot recover the
 baseline. The next numeric-loss test should keep Huber smoothing and tune its
 delta/transition point rather than moving all the way to L1.
 
+## Huber Delta 0.5 Ablation
+
+Commit:
+
+`5be520f feat: make numeric huber delta configurable`
+
+Run directory:
+
+`checkpoints/20260610_033844_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-huber-delta 0.5
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19819920464534632`
+- Best raw epoch: `48`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `0.00011889314768707444`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.11196256685849482`
+- Train raw MAE: `0.08586654288756558`
+- Train calibrated MAE: `0.07603812450730713`
+- Internal-val raw MAE: `0.1982043898309007`
+- Internal-val calibrated MAE: `0.19258874847583277`
+- Internal-val calibrated zero fraction: `0.4683708328425021`
+
+Conclusion: decreasing the compressed-space Huber transition point is also
+negative. Together with the L1 ablation, this suggests that making the numeric
+loss more absolute-error-like over a wider region hurts nonzero band-gap
+regression more than it helps zero-gap cases. The next numeric-loss ablation
+should test a larger Huber delta, keeping more errors in the smooth quadratic
+region.
+
 ## Notes
 
 - These are not final official Matbench test results.
