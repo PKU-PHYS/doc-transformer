@@ -655,6 +655,9 @@ def main():
                         help="Override ModelConfig.loss_scale_power")
     parser.add_argument("--loss-compression-scale", type=float, default=None,
                         help="Override ModelConfig.loss_compression_scale")
+    parser.add_argument("--numeric-loss", type=str, default=None,
+                        choices=["huber", "l1"],
+                        help="Override ModelConfig.numeric_loss")
     parser.add_argument("--numeric-output", type=str, default=None,
                         choices=["linear", "softplus"],
                         help="Override ModelConfig.numeric_output")
@@ -713,6 +716,8 @@ def main():
         model_config.loss_scale_power = args.loss_scale_power
     if args.loss_compression_scale is not None:
         model_config.loss_compression_scale = args.loss_compression_scale
+    if args.numeric_loss is not None:
+        model_config.numeric_loss = args.numeric_loss
     if args.numeric_output is not None:
         model_config.numeric_output = args.numeric_output
     if args.numeric_softplus_beta is not None:
@@ -762,6 +767,7 @@ def main():
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
+              f"loss={model_config.numeric_loss}, "
               f"output={model_config.numeric_output}, "
               f"pred_scale={model_config.prediction_scale}, "
               f"pred_bias={model_config.prediction_bias}, "
@@ -813,6 +819,7 @@ def main():
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
+              f"loss={model_config.numeric_loss}, "
               f"output={model_config.numeric_output}, "
               f"pred_scale={model_config.prediction_scale}, "
               f"pred_bias={model_config.prediction_bias}, "
@@ -923,6 +930,7 @@ def main():
         f"loss_exponent_max={model_config.loss_exponent_max}, "
         f"loss_scale_power={model_config.loss_scale_power}, "
         f"loss_compression_scale={model_config.loss_compression_scale}, "
+        f"numeric_loss={model_config.numeric_loss}, "
         f"numeric_output={model_config.numeric_output}, "
         f"numeric_softplus_beta={model_config.numeric_softplus_beta}, "
         f"prediction_scale={model_config.prediction_scale}, "

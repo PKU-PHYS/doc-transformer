@@ -44,6 +44,8 @@ class ModelConfig:
     loss_scale_power: float = 0.0
     # 额外压缩尺度: s·arcsinh(m/s)，=1 默认; >1 进一步放宽
     loss_compression_scale: float = 1.0
+    # 压缩空间中的逐样本数值 loss: "huber" 保持历史默认, "l1" 直接对齐 MAE
+    numeric_loss: str = "huber"
     # 数值输出约束：
     #   "linear": 无约束，适用于一般回归
     #   "softplus": 非负输出，适用于 band gap 等物理非负目标

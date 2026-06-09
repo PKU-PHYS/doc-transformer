@@ -125,10 +125,20 @@ class DocumentTransformer(nn.Module):
             m_true = targets_t / scale
             s = self.config.loss_compression_scale
             k = self.config.loss_scale_power
-            per_sample = F.huber_loss(
-                torch.arcsinh(m_pred / s) * s,
-                torch.arcsinh(m_true / s) * s,
-                reduction='none')
+            pred_loss_space = torch.arcsinh(m_pred / s) * s
+            true_loss_space = torch.arcsinh(m_true / s) * s
+            if self.config.numeric_loss == "huber":
+                per_sample = F.huber_loss(
+                    pred_loss_space,
+                    true_loss_space,
+                    reduction='none')
+            elif self.config.numeric_loss == "l1":
+                per_sample = F.l1_loss(
+                    pred_loss_space,
+                    true_loss_space,
+                    reduction='none')
+            else:
+                raise ValueError(f"Unknown numeric_loss: {self.config.numeric_loss!r}")
             # scale^k 量级补偿：k=0 无补偿, k=1 均匀梯度, k>1 偏重大值
             if k != 0:
                 per_sample = per_sample * torch.pow(scale, k)
