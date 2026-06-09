@@ -362,6 +362,49 @@ Conclusion: `same_parent` alone is a small positive result over the base
 the paired shared-group-depth run. It still does not beat the current best, so
 the next test is a controlled low-LR warm restart from this checkpoint.
 
+## Same-Parent Low-LR Warm Restart
+
+Run directory:
+
+`checkpoints/20260610_014156_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Warm-restart command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 15 --patience 15 --max-cpu-workers 4 \
+  --checkpoint-interval 5 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --bias-same-parent \
+  --resume checkpoints/20260610_010626_matbench_mp_gap_comp_cewald_cnn_dropcoords/matbench_mp_gap_train_best_val.pth \
+  --warm-restart --lr 2e-6
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19431427347915828`
+- Best warm-restart epoch: `11`
+- Final epoch raw internal-val MAE: `0.19446154055347664`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9768965517241379`
+- `prediction_bias`: `3.06204243980605e-05`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.108`
+- Train raw MAE: `0.07687364391452096`
+- Train calibrated MAE: `0.06463537889658519`
+- Internal-val raw MAE: `0.1942986494543743`
+- Internal-val calibrated MAE: `0.1878585800739121`
+
+Conclusion: the low-LR warm restart improves the same-parent ablation over its
+50-epoch checkpoint, but it still does not beat the current best base-feature
+low-LR warm restart (`0.18526953161707985` calibrated internal-val MAE).
+
 ## Notes
 
 - These are not final official Matbench test results.
