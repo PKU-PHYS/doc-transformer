@@ -27,6 +27,7 @@ class _ConstantModel(torch.nn.Module):
     ):
         super().__init__()
         self.config = SimpleNamespace(
+            prediction_scale=1.0,
             prediction_bias=0.0,
             prediction_min_value=prediction_min_value,
             prediction_zero_threshold=None,
@@ -62,13 +63,14 @@ class PredictionMinValueTest(unittest.TestCase):
 
     def test_postprocessing_order_is_bias_min_then_zero_threshold(self):
         config = SimpleNamespace(
+            prediction_scale=2.0,
             prediction_bias=-0.2,
             prediction_min_value=0.0,
             prediction_zero_threshold=0.15,
         )
-        self.assertAlmostEqual(apply_numeric_postprocessing(0.4, config), 0.2)
-        self.assertAlmostEqual(apply_numeric_postprocessing(0.25, config), 0.0)
-        self.assertAlmostEqual(apply_numeric_postprocessing(0.1, config), 0.0)
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.4, config), 0.6)
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.18, config), 0.16)
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.05, config), 0.0)
 
     def test_zero_head_threshold_can_gate_zero_prediction(self):
         model = _ConstantModel(

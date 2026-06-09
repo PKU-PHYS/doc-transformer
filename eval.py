@@ -13,6 +13,7 @@ import torch
 
 def apply_numeric_postprocessing(pred_val, config):
     """Apply configured scalar postprocessing to numeric predictions."""
+    pred_val = pred_val * getattr(config, "prediction_scale", 1.0)
     pred_val = pred_val + getattr(config, "prediction_bias", 0.0)
     prediction_min_value = getattr(config, "prediction_min_value", None)
     if prediction_min_value is not None:

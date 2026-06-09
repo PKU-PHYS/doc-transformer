@@ -47,7 +47,8 @@ class ModelConfig:
     #   "softplus": 非负输出，适用于 band gap 等物理非负目标
     numeric_output: str = "linear"
     numeric_softplus_beta: float = 1.0
-    # 数值预测校准: 先加 bias, 再做下界裁剪和近零阈值置零
+    # 数值预测校准: 先做 scale * raw + bias, 再做下界裁剪和近零阈值置零
+    prediction_scale: float = 1.0
     prediction_bias: float = 0.0
     # 验证/推理阶段的数值下界；None 表示不裁剪，band gap 可显式设为 0.0
     prediction_min_value: Optional[float] = None

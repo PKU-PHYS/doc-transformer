@@ -643,6 +643,8 @@ def main():
                         help="Override ModelConfig.numeric_output")
     parser.add_argument("--numeric-softplus-beta", type=float, default=None,
                         help="Override ModelConfig.numeric_softplus_beta")
+    parser.add_argument("--prediction-scale", type=float, default=None,
+                        help="Multiply numeric predictions by this scalar during evaluation/inference")
     parser.add_argument("--prediction-bias", type=float, default=None,
                         help="Add this scalar bias to numeric predictions during evaluation/inference")
     parser.add_argument("--prediction-min-value", type=float, default=None,
@@ -692,6 +694,8 @@ def main():
         model_config.numeric_output = args.numeric_output
     if args.numeric_softplus_beta is not None:
         model_config.numeric_softplus_beta = args.numeric_softplus_beta
+    if args.prediction_scale is not None:
+        model_config.prediction_scale = args.prediction_scale
     if args.prediction_bias is not None:
         model_config.prediction_bias = args.prediction_bias
     if args.prediction_min_value is not None:
@@ -731,6 +735,7 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"output={model_config.numeric_output}, "
+              f"pred_scale={model_config.prediction_scale}, "
               f"pred_bias={model_config.prediction_bias}, "
               f"pred_min={model_config.prediction_min_value}, "
               f"pred_zero={model_config.prediction_zero_threshold}, "
@@ -776,6 +781,7 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"output={model_config.numeric_output}, "
+              f"pred_scale={model_config.prediction_scale}, "
               f"pred_bias={model_config.prediction_bias}, "
               f"pred_min={model_config.prediction_min_value}, "
               f"pred_zero={model_config.prediction_zero_threshold}, "
@@ -878,6 +884,7 @@ def main():
         f"loss_compression_scale={model_config.loss_compression_scale}, "
         f"numeric_output={model_config.numeric_output}, "
         f"numeric_softplus_beta={model_config.numeric_softplus_beta}, "
+        f"prediction_scale={model_config.prediction_scale}, "
         f"prediction_bias={model_config.prediction_bias}, "
         f"prediction_min_value={model_config.prediction_min_value}, "
         f"prediction_zero_threshold={model_config.prediction_zero_threshold}, "

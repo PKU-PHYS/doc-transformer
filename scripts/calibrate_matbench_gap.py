@@ -63,8 +63,16 @@ def _collect_predictions(model, loader, device):
     return np.asarray(preds, dtype=np.float64), np.asarray(targets, dtype=np.float64)
 
 
-def _postprocess_array(preds, *, bias=0.0, min_value=None, zero_threshold=None):
+def _postprocess_array(
+    preds,
+    *,
+    scale=1.0,
+    bias=0.0,
+    min_value=None,
+    zero_threshold=None,
+):
     cfg = argparse.Namespace(
+        prediction_scale=scale,
         prediction_bias=bias,
         prediction_min_value=min_value,
         prediction_zero_threshold=zero_threshold,
@@ -74,6 +82,27 @@ def _postprocess_array(preds, *, bias=0.0, min_value=None, zero_threshold=None):
 
 def _fit_median_bias(preds, targets):
     return float(np.median(targets - preds))
+
+
+def _fit_scale_and_bias(preds, targets, min_value, scale_min, scale_max, scale_steps):
+    best_score = float("inf")
+    best_scale = None
+    best_bias = None
+    for scale in np.linspace(scale_min, scale_max, scale_steps):
+        scaled = preds * scale
+        bias = _fit_median_bias(scaled, targets)
+        calibrated = _postprocess_array(
+            preds,
+            scale=scale,
+            bias=bias,
+            min_value=min_value,
+        )
+        score = _mae(calibrated, targets)
+        if score < best_score:
+            best_score = score
+            best_scale = float(scale)
+            best_bias = bias
+    return best_scale, best_bias, best_score
 
 
 def _fit_zero_threshold(preds, targets):
@@ -92,11 +121,17 @@ def _fit_zero_threshold(preds, targets):
     return best_threshold, best_mae
 
 
-def _summarize_split(raw_preds, targets, *, bias, min_value, zero_threshold):
+def _summarize_split_with_scale(raw_preds, targets, *, scale, bias, min_value, zero_threshold):
     clipped = _postprocess_array(raw_preds, min_value=min_value)
-    biased_clipped = _postprocess_array(raw_preds, bias=bias, min_value=min_value)
+    scale_bias_clipped = _postprocess_array(
+        raw_preds,
+        scale=scale,
+        bias=bias,
+        min_value=min_value,
+    )
     calibrated = _postprocess_array(
         raw_preds,
+        scale=scale,
         bias=bias,
         min_value=min_value,
         zero_threshold=zero_threshold,
@@ -105,7 +140,7 @@ def _summarize_split(raw_preds, targets, *, bias, min_value, zero_threshold):
         "n": int(len(targets)),
         "raw_mae": _mae(raw_preds, targets),
         "min_clamped_mae": _mae(clipped, targets),
-        "bias_min_clamped_mae": _mae(biased_clipped, targets),
+        "scale_bias_min_clamped_mae": _mae(scale_bias_clipped, targets),
         "calibrated_mae": _mae(calibrated, targets),
         "raw_negative_fraction": float(np.mean(raw_preds < 0.0)),
         "target_zero_fraction": float(np.mean(np.abs(targets) < 0.01)),
@@ -128,6 +163,9 @@ def main():
     parser.add_argument("--matbench-val-ratio", type=float, default=0.1)
     parser.add_argument("--prediction-min-value", type=float, default=0.0)
     parser.add_argument("--loss-compression-scale", type=float, default=5.0)
+    parser.add_argument("--scale-min", type=float, default=0.85)
+    parser.add_argument("--scale-max", type=float, default=1.08)
+    parser.add_argument("--scale-steps", type=int, default=117)
     register_matbench_args(parser)
     args = parser.parse_args()
     validate_matbench_args(args, parser)
@@ -139,6 +177,7 @@ def main():
     model_config.loss_compression_scale = args.loss_compression_scale
     model_config.numeric_output = "linear"
     model_config.use_zero_head = False
+    model_config.prediction_scale = 1.0
     model_config.prediction_bias = 0.0
     model_config.prediction_min_value = None
     model_config.prediction_zero_threshold = None
@@ -204,9 +243,17 @@ def main():
     train_preds, train_targets = _collect_predictions(model, train_loader, device)
     val_preds, val_targets = _collect_predictions(model, val_loader, device)
 
-    bias = _fit_median_bias(train_preds, train_targets)
+    scale, bias, train_scale_bias_mae = _fit_scale_and_bias(
+        train_preds,
+        train_targets,
+        args.prediction_min_value,
+        args.scale_min,
+        args.scale_max,
+        args.scale_steps,
+    )
     train_biased_clipped = _postprocess_array(
         train_preds,
+        scale=scale,
         bias=bias,
         min_value=args.prediction_min_value,
     )
@@ -227,27 +274,32 @@ def main():
         },
         "dataset_options": dataset_options,
         "fit_policy": {
-            "bias": "median(target - prediction) on official train-only subset",
-            "zero_threshold": "MAE-minimizing threshold on train predictions after bias and min clamp",
+            "scale": "grid search on train MAE after median-bias and min clamp",
+            "bias": "median(target - scale * prediction) on official train-only subset",
+            "zero_threshold": "MAE-minimizing threshold on train predictions after scale, bias, and min clamp",
             "test_targets": "omitted",
         },
         "calibration": {
+            "prediction_scale": scale,
             "prediction_bias": bias,
             "prediction_min_value": args.prediction_min_value,
             "prediction_zero_threshold": zero_threshold,
+            "train_scale_bias_fit_mae": train_scale_bias_mae,
             "train_threshold_fit_mae": train_threshold_mae,
         },
         "metrics": {
-            "train": _summarize_split(
+            "train": _summarize_split_with_scale(
                 train_preds,
                 train_targets,
+                scale=scale,
                 bias=bias,
                 min_value=args.prediction_min_value,
                 zero_threshold=zero_threshold,
             ),
-            "val": _summarize_split(
+            "val": _summarize_split_with_scale(
                 val_preds,
                 val_targets,
+                scale=scale,
                 bias=bias,
                 min_value=args.prediction_min_value,
                 zero_threshold=zero_threshold,
