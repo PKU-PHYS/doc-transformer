@@ -38,22 +38,41 @@ def load_validation_splits(
     """
     path = pathlib.Path(cache_path) if cache_path else default_validation_cache_path()
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=path.parent)
-        os.close(fd)
-        tmp_path = pathlib.Path(tmp_name)
-        try:
-            urllib.request.urlretrieve(url, tmp_path)
-            tmp_path.replace(path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        _download_validation_file(url, path)
 
-    with open(path, "r") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except json.JSONDecodeError:
+        path.unlink(missing_ok=True)
+        _download_validation_file(url, path)
+        with open(path, "r") as f:
+            data = json.load(f)
+
     if "splits" not in data:
         raise ValueError(f"Invalid Matbench validation file: missing 'splits' in {path}")
     return data
+
+
+def _download_validation_file(url: str, path: pathlib.Path):
+    """Download validation JSON atomically so partial files are never cached."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name, suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    tmp_path = pathlib.Path(tmp_name)
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "doc-transformer"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        tmp_path.replace(path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def official_fold_ids(
