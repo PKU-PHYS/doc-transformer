@@ -16,6 +16,47 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
+`checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Warm-restart command:
+
+```bash
+env PYTHONUNBUFFERED=1 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 15 --patience 15 --max-cpu-workers 4 \
+  --checkpoint-interval 5 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --resume checkpoints/20260609_211539_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_best_val.pth \
+  --warm-restart --lr 2e-6
+```
+
+This loaded only the E74 tail-resume best model weights and restarted the
+optimizer/scheduler at a controlled low learning rate.
+
+Training result:
+
+- Best raw internal-val MAE: `0.1909816447128995`
+- Best raw epoch: `9`
+- Final epoch raw internal-val MAE: `0.19169204973260823`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `0.0020258320262655618`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.08749280689075462`
+- Train raw MAE: `0.06243138569799237`
+- Train calibrated MAE: `0.05116716518026227`
+- Internal-val raw MAE: `0.1909633870402973`
+- Internal-val calibrated MAE: `0.18526953161707985`
+
+## 80-Epoch Tail Resume Reference
+
+Run directory:
+
 `checkpoints/20260609_211539_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
 
 Resume command:
@@ -116,6 +157,8 @@ Result:
 The 50-epoch schedule improves over this baseline by about `0.0176` MAE after
 the same train-only calibration procedure. The 80-epoch tail resume improves
 over the 30-epoch baseline by about `0.0208` MAE after train-only calibration.
+The controlled low-LR warm restart improves over the 30-epoch baseline by about
+`0.0213` MAE after train-only calibration.
 
 ## Density Feature Negative Result
 
@@ -141,5 +184,5 @@ recipe under this schedule.
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
 - The strongest clean improvement so far comes from a longer cosine schedule,
-  the 80-epoch tail resume, and train-only scale/bias/nonnegative/zero-threshold
-  calibration.
+  the 80-epoch tail resume, a controlled low-LR warm restart, and train-only
+  scale/bias/nonnegative/zero-threshold calibration.
