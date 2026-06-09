@@ -17,6 +17,7 @@ import json
 import random
 import argparse
 import functools
+from dataclasses import asdict
 import torch
 import matplotlib
 matplotlib.use("Agg")  # 无头模式
@@ -607,8 +608,25 @@ def main():
                         help="Override TrainConfig.batch_size")
     parser.add_argument("--lr", type=float, default=None,
                         help="Override TrainConfig.lr")
+    parser.add_argument("--structural-bias-lr-mult", type=float, default=None,
+                        help="Override TrainConfig.structural_bias_lr_mult")
     parser.add_argument("--max-cpu-workers", type=int, default=None,
                         help="Override TrainConfig.max_cpu_workers")
+    parser.add_argument("--loss-exponent-min", type=int, default=None,
+                        help="Override ModelConfig.loss_exponent_min")
+    parser.add_argument("--loss-exponent-max", type=int, default=None,
+                        help="Override ModelConfig.loss_exponent_max")
+    parser.add_argument("--loss-scale-power", type=float, default=None,
+                        help="Override ModelConfig.loss_scale_power")
+    parser.add_argument("--loss-compression-scale", type=float, default=None,
+                        help="Override ModelConfig.loss_compression_scale")
+    parser.add_argument("--use-zero-head", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Enable numeric zero auxiliary/classification head")
+    parser.add_argument("--zero-threshold", type=float, default=None,
+                        help="Override ModelConfig.zero_threshold")
+    parser.add_argument("--zero-neg-weight", type=float, default=None,
+                        help="Override ModelConfig.zero_neg_weight")
     parser.add_argument("--max-epochs", type=int, default=None,
                         help="Override every stage max_epochs")
     parser.add_argument("--patience", type=int, default=None,
@@ -627,8 +645,24 @@ def main():
         train_config.batch_size = args.batch_size
     if args.lr is not None:
         train_config.lr = args.lr
+    if args.structural_bias_lr_mult is not None:
+        train_config.structural_bias_lr_mult = args.structural_bias_lr_mult
     if args.max_cpu_workers is not None:
         train_config.max_cpu_workers = args.max_cpu_workers
+    if args.loss_exponent_min is not None:
+        model_config.loss_exponent_min = args.loss_exponent_min
+    if args.loss_exponent_max is not None:
+        model_config.loss_exponent_max = args.loss_exponent_max
+    if args.loss_scale_power is not None:
+        model_config.loss_scale_power = args.loss_scale_power
+    if args.loss_compression_scale is not None:
+        model_config.loss_compression_scale = args.loss_compression_scale
+    if args.use_zero_head is not None:
+        model_config.use_zero_head = args.use_zero_head
+    if args.zero_threshold is not None:
+        model_config.zero_threshold = args.zero_threshold
+    if args.zero_neg_weight is not None:
+        model_config.zero_neg_weight = args.zero_neg_weight
     print(f"  📐 Model preset: {args.model_size}")
 
     is_matbench = args.dataset.startswith("matbench_")
@@ -648,7 +682,12 @@ def main():
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
-        print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
+        print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
+              f"bias_lr_mult={train_config.structural_bias_lr_mult}")
+        print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
+              f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
+              f"compression={model_config.loss_compression_scale}, "
+              f"zero_head={model_config.use_zero_head}")
         print(f"Matbench task: {args.dataset} — {mb_config.description}")
         print(f"Eval metric: {eval_metric.upper()}")
         if dataset_options:
@@ -683,7 +722,12 @@ def main():
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
-        print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}")
+        print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
+              f"bias_lr_mult={train_config.structural_bias_lr_mult}")
+        print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
+              f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
+              f"compression={model_config.loss_compression_scale}, "
+              f"zero_head={model_config.use_zero_head}")
         print(f"Dataset config: n_rows={ds_config.n_rows}, "
               f"stages={len(ds_config.stages)}, task={ds_config.task_type}")
 
@@ -741,6 +785,28 @@ def main():
     os.makedirs(checkpoint_dir, exist_ok=True)
     print(f"Checkpoint dir: {checkpoint_dir}")
 
+    run_metadata = {
+        "seed": SEED,
+        "dataset": args.dataset,
+        "model_size": args.model_size,
+        "model_config": asdict(model_config),
+        "train_config": asdict(train_config),
+        "cli_args": vars(args),
+    }
+    if is_matbench:
+        run_metadata["dataset_options"] = dataset_options
+        run_metadata["matbench_split"] = {
+            "strategy": args.matbench_split,
+            "fold": args.matbench_fold,
+            "val_ratio": args.matbench_val_ratio,
+            "eval_test": args.eval_test,
+            "loader_metadata": getattr(mb_loader, "split_metadata", {}),
+        }
+    metadata_path = os.path.join(checkpoint_dir, "run_metadata.json")
+    with open(metadata_path, "w") as f:
+        json.dump(run_metadata, f, indent=2, sort_keys=True)
+    print(f"  🧾 Run metadata: {metadata_path}")
+
     # ── TensorBoard ──
     writer = SummaryWriter(log_dir=os.path.join("runs", run_name))
     print(f"  📊 TensorBoard: runs/{run_name}")
@@ -749,7 +815,18 @@ def main():
     writer.add_text("config/model", f"d={model_config.d_model}, L={model_config.n_layers}, "
                      f"H={model_config.n_heads}, ff={model_config.d_ff}")
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
+                     f"bias_lr_mult={train_config.structural_bias_lr_mult}, "
                      f"dataset={args.dataset}")
+    writer.add_text(
+        "config/numeric_loss",
+        f"loss_exponent_min={model_config.loss_exponent_min}, "
+        f"loss_exponent_max={model_config.loss_exponent_max}, "
+        f"loss_scale_power={model_config.loss_scale_power}, "
+        f"loss_compression_scale={model_config.loss_compression_scale}, "
+        f"use_zero_head={model_config.use_zero_head}, "
+        f"zero_threshold={model_config.zero_threshold}, "
+        f"zero_neg_weight={model_config.zero_neg_weight}",
+    )
     if is_matbench:
         opts_str = ", ".join(f"{k}={v}" for k, v in sorted(dataset_options.items())) or "default"
         writer.add_text("config/dataset_options", opts_str)
