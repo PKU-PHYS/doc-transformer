@@ -250,6 +250,7 @@ def train_stage(
     eval_test: bool = False,
     eval_metric: str = "rmse",
     log_every: int = 50,
+    eval_train_every: int = 1,
 ) -> dict:
     """
     训练单个 Stage，基于 loss plateau 自动结束。
@@ -476,11 +477,17 @@ def train_stage(
                          epoch=epoch+1, batch_idx=batch_idx)
 
         # ── Train 评估 ──
-        train_score = evaluate(model, loader, device, metric=eval_metric)
-        train_metric_name = f"train_{eval_metric}"
-        stage_log.setdefault(train_metric_name, []).append(train_score)
-        if writer is not None:
-            writer.add_scalar(f"{stage_name}/{train_metric_name}", train_score, epoch + 1)
+        train_score = None
+        should_eval_train = (
+            eval_train_every > 0
+            and ((epoch + 1) % eval_train_every == 0 or epoch + 1 == max_epochs)
+        )
+        if should_eval_train:
+            train_score = evaluate(model, loader, device, metric=eval_metric)
+            train_metric_name = f"train_{eval_metric}"
+            stage_log.setdefault(train_metric_name, []).append(train_score)
+            if writer is not None:
+                writer.add_scalar(f"{stage_name}/{train_metric_name}", train_score, epoch + 1)
 
         # ── Validation 评估（Matbench 优化阶段只看 val,不碰 held-out test）──
         val_score = None
@@ -516,13 +523,17 @@ def train_stage(
             if writer is not None:
                 writer.add_scalar(f"{stage_name}/{test_metric_name}", test_score, epoch + 1)
 
-        score_parts = [f"Train {eval_metric.upper()}: {train_score:.4f}"]
+        score_parts = []
+        if train_score is not None:
+            score_parts.append(f"Train {eval_metric.upper()}: {train_score:.4f}")
         if val_score is not None:
             score_parts.append(f"Val {eval_metric.upper()}: {val_score:.4f}")
-            score_parts.append(f"ValGap: {val_score - train_score:.4f}")
+            if train_score is not None:
+                score_parts.append(f"ValGap: {val_score - train_score:.4f}")
         if test_score is not None:
             score_parts.append(f"Test {eval_metric.upper()}: {test_score:.4f}")
-            score_parts.append(f"TestGap: {test_score - train_score:.4f}")
+            if train_score is not None:
+                score_parts.append(f"TestGap: {test_score - train_score:.4f}")
         print("  🎯 " + "  |  ".join(score_parts))
 
         # ── TensorBoard: per-epoch metrics ──
@@ -668,6 +679,8 @@ def main():
                         help="Save training-state checkpoints every N epochs")
     parser.add_argument("--log-every", type=int, default=50,
                         help="Print one training batch every N batches (0 disables batch prints)")
+    parser.add_argument("--eval-train-every", type=int, default=1,
+                        help="Evaluate train split every N epochs (0 disables train MAE)")
     args = parser.parse_args()
     validate_matbench_args(args, parser)
 
@@ -964,6 +977,7 @@ def main():
             eval_metric=eval_metric,
             checkpoint_interval=args.checkpoint_interval,
             log_every=args.log_every,
+            eval_train_every=args.eval_train_every,
         )
         save_checkpoint(model, f"{stage_cfg.name}_final", checkpoint_dir, log)
         all_logs[stage_cfg.name] = log
