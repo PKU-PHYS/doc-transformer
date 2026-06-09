@@ -121,6 +121,19 @@ def _fit_zero_threshold(preds, targets):
     return best_threshold, best_mae
 
 
+def _fit_isotonic(train_preds, train_targets, min_value):
+    from sklearn.isotonic import IsotonicRegression
+
+    model = IsotonicRegression(
+        y_min=min_value,
+        y_max=None,
+        increasing=True,
+        out_of_bounds="clip",
+    )
+    model.fit(train_preds, train_targets)
+    return model
+
+
 def _load_run_metadata_for_checkpoint(checkpoint_path):
     metadata_path = pathlib.Path(checkpoint_path).with_name("run_metadata.json")
     if not metadata_path.exists():
@@ -170,6 +183,16 @@ def _summarize_split_with_scale(raw_preds, targets, *, scale, bias, min_value, z
     }
 
 
+def _summarize_precomputed(preds, targets):
+    return {
+        "n": int(len(targets)),
+        "mae": _mae(preds, targets),
+        "negative_fraction": float(np.mean(preds < 0.0)),
+        "target_zero_fraction": float(np.mean(np.abs(targets) < 0.01)),
+        "prediction_zero_fraction": float(np.mean(preds == 0.0)),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fit train-only scalar calibration for matbench_mp_gap",
@@ -188,6 +211,17 @@ def main():
     parser.add_argument("--scale-min", type=float, default=0.85)
     parser.add_argument("--scale-max", type=float, default=1.08)
     parser.add_argument("--scale-steps", type=int, default=117)
+    parser.add_argument(
+        "--also-fit-isotonic",
+        action="store_true",
+        help="Also report train-only monotonic calibration without changing scalar output",
+    )
+    parser.add_argument(
+        "--isotonic-input",
+        choices=("raw", "scale_bias"),
+        default="scale_bias",
+        help="Prediction values used as the isotonic calibration input",
+    )
     register_matbench_args(parser)
     args = parser.parse_args()
     validate_matbench_args(args, parser)
@@ -333,6 +367,56 @@ def main():
         },
     }
 
+    if args.also_fit_isotonic:
+        train_scale_bias_clipped = _postprocess_array(
+            train_preds,
+            scale=scale,
+            bias=bias,
+            min_value=args.prediction_min_value,
+        )
+        val_scale_bias_clipped = _postprocess_array(
+            val_preds,
+            scale=scale,
+            bias=bias,
+            min_value=args.prediction_min_value,
+        )
+        if args.isotonic_input == "raw":
+            train_iso_input = train_preds
+            val_iso_input = val_preds
+            input_policy = "raw checkpoint predictions"
+        else:
+            train_iso_input = train_scale_bias_clipped
+            val_iso_input = val_scale_bias_clipped
+            input_policy = "scale/bias/min-clamped predictions fitted on train only"
+
+        iso_model = _fit_isotonic(
+            train_iso_input,
+            train_targets,
+            args.prediction_min_value,
+        )
+        train_iso_preds = np.asarray(iso_model.predict(train_iso_input), dtype=np.float64)
+        val_iso_preds = np.asarray(iso_model.predict(val_iso_input), dtype=np.float64)
+        report["alternative_calibrations"] = {
+            "isotonic": {
+                "fit_policy": {
+                    "method": "sklearn.isotonic.IsotonicRegression",
+                    "input": input_policy,
+                    "target": "official train-only targets",
+                    "y_min": args.prediction_min_value,
+                    "out_of_bounds": "clip",
+                    "test_targets": "omitted",
+                },
+                "mapping": {
+                    "x_thresholds": [float(x) for x in iso_model.X_thresholds_],
+                    "y_thresholds": [float(y) for y in iso_model.y_thresholds_],
+                },
+                "metrics": {
+                    "train": _summarize_precomputed(train_iso_preds, train_targets),
+                    "val": _summarize_precomputed(val_iso_preds, val_targets),
+                },
+            }
+        }
+
     output = args.output
     if output is None:
         checkpoint_path = pathlib.Path(args.checkpoint)
@@ -344,6 +428,8 @@ def main():
 
     print(json.dumps(report["calibration"], indent=2))
     print(json.dumps(report["metrics"], indent=2))
+    if args.also_fit_isotonic:
+        print(json.dumps(report["alternative_calibrations"]["isotonic"]["metrics"], indent=2))
     print(f"Saved calibration report: {output_path}")
 
 
