@@ -1415,6 +1415,58 @@ combination candidates. At 20 epochs, this run beats the matched dropout
 baseline and both path-conditioned numeric-encoding probes. The next controlled
 combination should test whether `same_parent` composes with `numeric_path_film`.
 
+## Same-Parent Plus Numeric Path FiLM
+
+Run directory:
+
+`checkpoints/20260611_005630_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-same-parent --numeric-path-film
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.22441326740978518`
+- Best raw epoch: `19`
+- Final epoch raw internal-val MAE: `0.22468994033614004`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Short-run curve comparison:
+  - Same-parent bias E10/E15/E20: `0.2672322339495805` /
+    `0.23332767412909886` / `0.22355039390925138`
+  - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
+    `0.23928665507798033` / `0.22548361537685974`
+  - Same-parent + FiLM E10/E15/E20: `0.28283596255920135` /
+    `0.23217157084155363` / `0.22468994033614004`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9967241379310345`
+- `prediction_bias`: `-0.004168601747248964`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.246`
+- Train raw MAE: `0.14274681628578056`
+- Train calibrated MAE: `0.13411015176710628`
+- Internal-val raw MAE: `0.22440170794780204`
+- Internal-val calibrated MAE: `0.21810612102866203`
+- Binned-residual calibrated train MAE: `0.13386405785215164`
+- Binned-residual calibrated internal-val MAE: `0.21787665855156063`
+
+Conclusion: this combination is stronger than the FiLM-only probe but weaker
+than `same_parent` alone on the same 20-epoch schedule. The two mechanisms do
+not show clean additive gains here; the best next use of budget is to extend the
+`same_parent` dropout-baseline run rather than prioritizing a longer
+`same_parent + numeric_path_film` run.
+
 ## Notes
 
 - These are not final official Matbench test results.
