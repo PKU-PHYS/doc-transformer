@@ -134,6 +134,67 @@ def _fit_isotonic(train_preds, train_targets, min_value):
     return model
 
 
+def _fit_binned_residual(
+    preds,
+    targets,
+    *,
+    n_bins,
+    min_bin_size,
+    shrinkage,
+):
+    edges = np.quantile(preds, np.linspace(0.0, 1.0, n_bins + 1))
+    edges = np.unique(edges)
+    if len(edges) < 3:
+        return {
+            "centers": [],
+            "corrections": [],
+            "counts": [],
+            "edges": [float(x) for x in edges],
+        }
+
+    centers = []
+    corrections = []
+    counts = []
+    residuals = targets - preds
+    for bin_idx in range(len(edges) - 1):
+        left = edges[bin_idx]
+        right = edges[bin_idx + 1]
+        if bin_idx == len(edges) - 2:
+            mask = (preds >= left) & (preds <= right)
+        else:
+            mask = (preds >= left) & (preds < right)
+
+        count = int(mask.sum())
+        if count < min_bin_size:
+            continue
+
+        center = float(np.median(preds[mask]))
+        residual = float(np.median(residuals[mask]))
+        shrink = count / (count + shrinkage)
+        centers.append(center)
+        corrections.append(float(residual * shrink))
+        counts.append(count)
+
+    return {
+        "centers": centers,
+        "corrections": corrections,
+        "counts": counts,
+        "edges": [float(x) for x in edges],
+    }
+
+
+def _apply_binned_residual(preds, mapping, min_value):
+    centers = np.asarray(mapping["centers"], dtype=np.float64)
+    corrections = np.asarray(mapping["corrections"], dtype=np.float64)
+    if len(centers) < 2:
+        corrected = preds.copy()
+    else:
+        corrected = preds + np.interp(preds, centers, corrections)
+    if min_value is not None:
+        corrected = np.maximum(corrected, min_value)
+    return corrected
+
+
 def _load_run_metadata_for_checkpoint(checkpoint_path):
     metadata_path = pathlib.Path(checkpoint_path).with_name("run_metadata.json")
     if not metadata_path.exists():
@@ -222,6 +283,14 @@ def main():
         default="scale_bias",
         help="Prediction values used as the isotonic calibration input",
     )
+    parser.add_argument(
+        "--also-fit-binned-residual",
+        action="store_true",
+        help="Also report train-only binned residual calibration without changing scalar output",
+    )
+    parser.add_argument("--binned-residual-bins", type=int, default=8)
+    parser.add_argument("--binned-residual-min-bin-size", type=int, default=1000)
+    parser.add_argument("--binned-residual-shrinkage", type=float, default=5000.0)
     register_matbench_args(parser)
     args = parser.parse_args()
     validate_matbench_args(args, parser)
@@ -417,6 +486,70 @@ def main():
             }
         }
 
+    if args.also_fit_binned_residual:
+        train_scale_bias_clipped = _postprocess_array(
+            train_preds,
+            scale=scale,
+            bias=bias,
+            min_value=args.prediction_min_value,
+        )
+        val_scale_bias_clipped = _postprocess_array(
+            val_preds,
+            scale=scale,
+            bias=bias,
+            min_value=args.prediction_min_value,
+        )
+        residual_mapping = _fit_binned_residual(
+            train_scale_bias_clipped,
+            train_targets,
+            n_bins=args.binned_residual_bins,
+            min_bin_size=args.binned_residual_min_bin_size,
+            shrinkage=args.binned_residual_shrinkage,
+        )
+        train_residual_preds = _apply_binned_residual(
+            train_scale_bias_clipped,
+            residual_mapping,
+            args.prediction_min_value,
+        )
+        val_residual_preds = _apply_binned_residual(
+            val_scale_bias_clipped,
+            residual_mapping,
+            args.prediction_min_value,
+        )
+        residual_zero_threshold, residual_train_threshold_mae = _fit_zero_threshold(
+            train_residual_preds,
+            train_targets,
+        )
+        train_residual_calibrated = _postprocess_array(
+            train_residual_preds,
+            zero_threshold=residual_zero_threshold,
+        )
+        val_residual_calibrated = _postprocess_array(
+            val_residual_preds,
+            zero_threshold=residual_zero_threshold,
+        )
+        report.setdefault("alternative_calibrations", {})["binned_residual"] = {
+            "fit_policy": {
+                "method": "quantile-bin median residual correction with shrinkage",
+                "input": "scale/bias/min-clamped predictions fitted on train only",
+                "target": "official train-only targets",
+                "bins": args.binned_residual_bins,
+                "min_bin_size": args.binned_residual_min_bin_size,
+                "shrinkage": args.binned_residual_shrinkage,
+                "zero_threshold": "refit on residual-corrected train predictions",
+                "test_targets": "omitted",
+            },
+            "mapping": residual_mapping,
+            "calibration": {
+                "prediction_zero_threshold": residual_zero_threshold,
+                "train_threshold_fit_mae": residual_train_threshold_mae,
+            },
+            "metrics": {
+                "train": _summarize_precomputed(train_residual_calibrated, train_targets),
+                "val": _summarize_precomputed(val_residual_calibrated, val_targets),
+            },
+        }
+
     output = args.output
     if output is None:
         checkpoint_path = pathlib.Path(args.checkpoint)
@@ -430,6 +563,8 @@ def main():
     print(json.dumps(report["metrics"], indent=2))
     if args.also_fit_isotonic:
         print(json.dumps(report["alternative_calibrations"]["isotonic"]["metrics"], indent=2))
+    if args.also_fit_binned_residual:
+        print(json.dumps(report["alternative_calibrations"]["binned_residual"], indent=2))
     print(f"Saved calibration report: {output_path}")
 
 
