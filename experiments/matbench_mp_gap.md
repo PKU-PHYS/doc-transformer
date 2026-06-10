@@ -23,24 +23,28 @@ Averaged checkpoint:
 `avg_e10_e15.pth`
 
 This averages the two saved low-LR warm-restart checkpoints from epoch 10 and
-epoch 15, then applies the same train-only scalar calibration used elsewhere in
-this file.
+epoch 15, then applies train-only scalar calibration plus a conservative binned
+residual correction fitted only on the official train subset.
 
 Result:
 
 - Raw internal-val MAE: `0.1915938070899512`
-- Calibrated internal-val MAE: `0.18508102969846527`
-- Calibrated train MAE: `0.0510266941334119`
+- Scalar calibrated internal-val MAE: `0.18508102969846527`
+- Binned-residual calibrated internal-val MAE: `0.18496897995763836`
+- Binned-residual calibrated train MAE: `0.05090135484499366`
 - `prediction_scale`: `0.9768965517241379`
 - `prediction_bias`: `-0.0003890366042996275`
 - `prediction_min_value`: `0.0`
 - `prediction_zero_threshold`: `0.08361550587698303`
+- Binned-residual bins: `6`
+- Binned-residual shrinkage: `5000.0`
+- Binned-residual zero threshold: `0.066`
 - Checkpoint source: weight average of `matbench_mp_gap_train_e10.pth` and
   `matbench_mp_gap_train_e15.pth`
 
-The previous single-checkpoint best was `0.18526953161707985`, so this is a
-small no-leakage improvement of about `0.00019` MAE on the single official
-fold0 internal-validation split.
+The previous scalar-calibrated averaged-checkpoint best was
+`0.18508102969846527`, so this is another small no-leakage improvement of about
+`0.00011` MAE on the single official fold0 internal-validation split.
 
 ## Previous Best Single-Checkpoint Result
 
@@ -731,6 +735,46 @@ same-trajectory checkpoint average (`0.18508102969846527`). It slightly improved
 raw MAE relative to the averaged checkpoint but moved the train-only calibration
 in the wrong direction, so this path is not the next best use of compute.
 
+## Binned Residual Calibration Ablation
+
+Commit:
+
+`20af48b feat: report binned residual calibration`
+
+Run directory:
+
+`checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Checkpoint:
+
+`avg_e10_e15.pth`
+
+Calibration command pattern:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python scripts/calibrate_matbench_gap.py \
+  --checkpoint checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/avg_e10_e15.pth \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --batch-size 256 --max-cpu-workers 4 --loss-compression-scale 5.0 \
+  --also-fit-binned-residual --binned-residual-bins <bins> \
+  --binned-residual-shrinkage <shrinkage>
+```
+
+Result:
+
+| Calibration | Scalar val MAE | Residual val MAE | Residual train MAE |
+| --- | ---: | ---: | ---: |
+| `8 bins, shrinkage 5000` | `0.1850801124643769` | `0.18498806346515725` | `0.05086737283664464` |
+| `6 bins, shrinkage 5000` | `0.18508102969846527` | `0.18496897995763836` | `0.05090135484499366` |
+| `8 bins, shrinkage 10000` | `0.1850851433462705` | `0.18500740347798172` | `0.050881150634927604` |
+
+Conclusion: a small, shrinkage-regularized residual correction improves the
+averaged checkpoint without using held-out test labels. The best single-fold
+candidate uses 6 quantile bins and shrinkage 5000; the nearby settings also
+improve over scalar calibration, but by a smaller amount.
+
 ## Notes
 
 - These are not final official Matbench test results.
@@ -738,4 +782,4 @@ in the wrong direction, so this path is not the next best use of compute.
 - The strongest clean improvement so far comes from a longer cosine schedule,
   the 80-epoch tail resume, a controlled low-LR warm restart, same-trajectory
   checkpoint averaging, and train-only scale/bias/nonnegative/zero-threshold
-  calibration.
+  plus binned-residual calibration.
