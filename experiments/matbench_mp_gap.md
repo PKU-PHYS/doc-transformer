@@ -1683,6 +1683,57 @@ the previous dropout-only 80-epoch calibrated best or the new three-way
 useful but composes most effectively with `numeric_path_film` rather than
 standing alone as the dominant improvement.
 
+## Dropout Plus Numeric Path FiLM 80-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_050428_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --numeric-path-film
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.1849508279662171`
+- Best raw epoch: `75`
+- Final epoch raw internal-val MAE: `0.18501803992899016`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.1891040019851296` /
+    `0.18536893658598574` / `0.185075655899327` /
+    `0.1849508279662171` / `0.18501803992899016`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9868103448275862`
+- `prediction_bias`: `0.00046773190577996187`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.05`
+- Train raw MAE: `0.03331615803422045`
+- Train calibrated MAE: `0.026027095241415416`
+- Internal-val raw MAE: `0.18493986210893149`
+- Internal-val calibrated MAE: `0.1822814564514201`
+- Binned-residual calibrated train MAE: `0.025982146492600156`
+- Binned-residual calibrated internal-val MAE: `0.18218630031045166`
+
+Conclusion: `dropout=0.05 + numeric_path_film` is a positive long-run result,
+roughly matching the raw dropout-only schedule but landing behind it after
+train-only calibration. It is stronger than `dropout=0.05 +
+bias_discrete_depths`, while the three-way `dropout + discrete + FiLM`
+combination remains best. This keeps FiLM as a useful generic numeric-path
+bias, but suggests it needs the discrete depth encoding to produce the best
+fold0 interaction.
+
 ## Notes
 
 - These are not final official Matbench test results.
