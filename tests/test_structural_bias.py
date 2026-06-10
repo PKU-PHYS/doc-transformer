@@ -11,8 +11,9 @@ import unittest
 
 import torch
 
+from config import ModelConfig
 from model.json_parser import JSONParser
-from model.transformer import StructuralBiasEncoder
+from model.transformer import GlobalTransformer, StructuralBiasEncoder
 from data.base import compute_single_structural_bias
 
 
@@ -360,6 +361,37 @@ class StructuralBiasEncoderTests(unittest.TestCase):
         }
         out = self.encoder(**signals)
         self.assertEqual(out.shape, (B * 4, T, T))
+
+    def test_category_depth_levels_are_zero_initialized(self):
+        """离散 depth-like bias 注册后仍保持初始 bias=0。"""
+        encoder = StructuralBiasEncoder(num_heads=4, encoding_dim=16)
+        encoder.register_category("first_diff", num_classes=8)
+        encoder.register_category("tree_dist", num_classes=8)
+
+        B, T = 2, 4
+        out = encoder(
+            first_diff=torch.ones(B, T, T, dtype=torch.long),
+            tree_dist=torch.ones(B, T, T, dtype=torch.long) * 2,
+        )
+
+        self.assertEqual(out.shape, (B * 4, T, T))
+        self.assertTrue(torch.allclose(out, torch.zeros_like(out), atol=1e-6))
+
+    def test_global_transformer_can_register_discrete_depths(self):
+        """配置开关应把 first_diff/tree_dist 从 continuous 换成 category。"""
+        config = ModelConfig(
+            d_model=16,
+            n_layers=1,
+            n_heads=4,
+            d_ff=32,
+            bias_discrete_depths=True,
+            bias_discrete_depth_bins=16,
+        )
+        model = GlobalTransformer(config)
+
+        self.assertEqual(model.bias_encoder._kinds["first_diff"], "category")
+        self.assertEqual(model.bias_encoder._kinds["tree_dist"], "category")
+        self.assertEqual(model.bias_encoder._encoders["first_diff"].num_embeddings, 16)
 
 
 if __name__ == "__main__":

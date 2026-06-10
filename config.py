@@ -25,6 +25,10 @@ class ModelConfig:
     bias_shared_group_depth: bool = False
     bias_same_path_template: bool = False
     bias_value_type_pair: bool = False
+    # 对 first_diff/tree_dist/shared_group_depth 这类小整数结构层级使用离散 embedding，
+    # 而不是 sinusoidal continuous 投影。默认关闭以保持旧 checkpoint 结构。
+    bias_discrete_depths: bool = False
+    bias_discrete_depth_bins: int = 128
     
     # 傅里叶特征 (数值编码用)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128

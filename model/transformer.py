@@ -80,7 +80,8 @@ class StructuralBiasEncoder(nn.Module):
                 continue
             module = self._encoders[name]
             if self._kinds[name] == "category":
-                contrib = module(value.long())                       # (B,T,T,H)
+                indices = value.long().clamp(0, module.num_embeddings - 1)
+                contrib = module(indices)                            # (B,T,T,H)
             else:
                 contrib = module(self._sinusoidal_encode(value))     # (B,T,T,H)
             total = contrib if total is None else total + contrib
@@ -113,12 +114,22 @@ class GlobalTransformer(nn.Module):
             encoding_dim=config.bias_encoding_dim,
         )
         self.bias_encoder.register_category("is_group_fork", num_classes=2)
-        self.bias_encoder.register_continuous("first_diff")
-        self.bias_encoder.register_continuous("tree_dist")
+        if config.bias_discrete_depths:
+            self.bias_encoder.register_category("first_diff", num_classes=config.bias_discrete_depth_bins)
+            self.bias_encoder.register_category("tree_dist", num_classes=config.bias_discrete_depth_bins)
+        else:
+            self.bias_encoder.register_continuous("first_diff")
+            self.bias_encoder.register_continuous("tree_dist")
         if config.bias_same_parent:
             self.bias_encoder.register_category("same_parent", num_classes=2)
         if config.bias_shared_group_depth:
-            self.bias_encoder.register_continuous("shared_group_depth")
+            if config.bias_discrete_depths:
+                self.bias_encoder.register_category(
+                    "shared_group_depth",
+                    num_classes=config.bias_discrete_depth_bins,
+                )
+            else:
+                self.bias_encoder.register_continuous("shared_group_depth")
         if config.bias_same_path_template:
             self.bias_encoder.register_category("same_path_template", num_classes=2)
         if config.bias_value_type_pair:

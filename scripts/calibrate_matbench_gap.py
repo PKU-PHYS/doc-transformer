@@ -339,6 +339,8 @@ def _apply_architecture_metadata(model_config, metadata):
         "bias_shared_group_depth",
         "bias_same_path_template",
         "bias_value_type_pair",
+        "bias_discrete_depths",
+        "bias_discrete_depth_bins",
         "numeric_path_beta",
         "numeric_path_film",
     ):
