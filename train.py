@@ -251,6 +251,7 @@ def train_stage(
     eval_metric: str = "rmse",
     log_every: int = 50,
     eval_train_every: int = 1,
+    sample_every: int = 1,
 ) -> dict:
     """
     训练单个 Stage，基于 loss plateau 自动结束。
@@ -472,9 +473,10 @@ def train_stage(
               f"{mem_info}")
 
         # ── 每 epoch 结束展示一个诊断案例 ──
-        _log_sample_case(model, out, batched_leaves, batched_masks,
-                         sample_idx=0, stage_name=stage_name,
-                         epoch=epoch+1, batch_idx=batch_idx)
+        if sample_every > 0 and (epoch + 1) % sample_every == 0:
+            _log_sample_case(model, out, batched_leaves, batched_masks,
+                             sample_idx=0, stage_name=stage_name,
+                             epoch=epoch+1, batch_idx=batch_idx)
 
         # ── Train 评估 ──
         train_score = None
@@ -711,6 +713,8 @@ def main():
                         help="Save training-state checkpoints every N epochs")
     parser.add_argument("--log-every", type=int, default=50,
                         help="Print one training batch every N batches (0 disables batch prints)")
+    parser.add_argument("--sample-every", type=int, default=1,
+                        help="Print one diagnostic sample every N epochs (0 disables sample prints)")
     parser.add_argument("--eval-train-every", type=int, default=1,
                         help="Evaluate train split every N epochs (0 disables train MAE)")
     args = parser.parse_args()
@@ -1080,6 +1084,7 @@ def main():
             eval_metric=eval_metric,
             checkpoint_interval=args.checkpoint_interval,
             log_every=args.log_every,
+            sample_every=args.sample_every,
             eval_train_every=args.eval_train_every,
         )
         save_checkpoint(model, f"{stage_cfg.name}_final", checkpoint_dir, log)
