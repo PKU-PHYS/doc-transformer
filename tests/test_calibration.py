@@ -11,9 +11,11 @@ from eval import apply_numeric_postprocessing
 from scripts.calibrate_matbench_gap import (
     _apply_binned_residual,
     _collect_checkpoint_predictions,
+    _fit_binned_residual,
     _fit_cv_binned_residual,
     _parse_float_list,
     _parse_int_list,
+    _parse_optional_float_list,
 )
 
 
@@ -101,6 +103,22 @@ class CalibrationReportTests(unittest.TestCase):
     def test_grid_parsers(self):
         self.assertEqual(_parse_int_list("4,6,8"), [4, 6, 8])
         self.assertEqual(_parse_float_list("1,2.5"), [1.0, 2.5])
+        self.assertIsNone(_parse_optional_float_list(None))
+        self.assertEqual(_parse_optional_float_list("0,1"), [0.0, 1.0])
+
+    def test_fixed_binned_residual_edges_expand_to_prediction_range(self):
+        np = __import__("numpy")
+        mapping = _fit_binned_residual(
+            np.asarray([-1.0, 0.2, 0.8, 2.0]),
+            np.asarray([-0.5, 0.4, 1.0, 2.5]),
+            n_bins=3,
+            min_bin_size=1,
+            shrinkage=0.0,
+            edges=[0.0, 1.0],
+        )
+
+        self.assertEqual(mapping["edges"], [-1.0, 0.0, 1.0, 2.0])
+        self.assertEqual(mapping["counts"], [1, 2, 1])
 
     def test_collect_checkpoint_predictions_averages_ensemble(self):
         class Head:

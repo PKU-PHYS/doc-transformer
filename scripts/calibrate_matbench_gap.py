@@ -176,8 +176,16 @@ def _fit_binned_residual(
     n_bins,
     min_bin_size,
     shrinkage,
+    edges=None,
 ):
-    edges = np.quantile(preds, np.linspace(0.0, 1.0, n_bins + 1))
+    if edges is None:
+        edges = np.quantile(preds, np.linspace(0.0, 1.0, n_bins + 1))
+    else:
+        edges = np.asarray(edges, dtype=np.float64)
+        if edges[0] > np.min(preds):
+            edges = np.concatenate([[np.min(preds)], edges])
+        if edges[-1] < np.max(preds):
+            edges = np.concatenate([edges, [np.max(preds)]])
     edges = np.unique(edges)
     if len(edges) < 3:
         return {
@@ -236,6 +244,12 @@ def _parse_int_list(text):
 
 def _parse_float_list(text):
     return [float(part) for part in text.split(",") if part]
+
+
+def _parse_optional_float_list(text):
+    if not text:
+        return None
+    return _parse_float_list(text)
 
 
 def _fit_cv_binned_residual(
@@ -406,6 +420,11 @@ def main():
         help="Also report train-only binned residual calibration without changing scalar output",
     )
     parser.add_argument("--binned-residual-bins", type=int, default=8)
+    parser.add_argument(
+        "--binned-residual-edges",
+        default=None,
+        help="Optional comma-separated fixed prediction-space bin edges",
+    )
     parser.add_argument("--binned-residual-min-bin-size", type=int, default=1000)
     parser.add_argument("--binned-residual-shrinkage", type=float, default=5000.0)
     parser.add_argument(
@@ -634,6 +653,7 @@ def main():
             n_bins=args.binned_residual_bins,
             min_bin_size=args.binned_residual_min_bin_size,
             shrinkage=args.binned_residual_shrinkage,
+            edges=_parse_optional_float_list(args.binned_residual_edges),
         )
         train_residual_preds = _apply_binned_residual(
             train_scale_bias_clipped,
@@ -663,6 +683,7 @@ def main():
                 "input": "scale/bias/min-clamped predictions fitted on train only",
                 "target": "official train-only targets",
                 "bins": args.binned_residual_bins,
+                "fixed_edges": _parse_optional_float_list(args.binned_residual_edges),
                 "min_bin_size": args.binned_residual_min_bin_size,
                 "shrinkage": args.binned_residual_shrinkage,
                 "zero_threshold": "refit on residual-corrected train predictions",
