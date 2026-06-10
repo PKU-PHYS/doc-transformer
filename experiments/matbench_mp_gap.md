@@ -987,6 +987,46 @@ candidate (`0.18497`), and the binned-residual correction does not help this
 checkpoint. The next low-cost follow-up should warm-restart from the epoch 46
 best checkpoint with the same `dropout=0.05` setting.
 
+## Dropout 0.05 Low-LR Warm Restart
+
+Run directory:
+
+`checkpoints/20260610_154412_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Source checkpoint:
+
+`checkpoints/20260610_150732_matbench_mp_gap_comp_cewald_cnn_dropcoords/matbench_mp_gap_train_best_val.pth`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --resume checkpoints/20260610_150732_matbench_mp_gap_comp_cewald_cnn_dropcoords/matbench_mp_gap_train_best_val.pth \
+  --warm-restart \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 5 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --lr 2e-6
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19217697372522413` at restart epoch 10
+- Train-only scalar calibrated internal-val MAE: `0.1880308904109926`
+- Train-only binned-residual calibrated internal-val MAE:
+  `0.18799017998228945`
+
+Conclusion: the low-LR warm restart preserves the dropout improvement and
+continues the same structural training direction, improving the 50-epoch
+dropout run from `0.19300` raw / `0.18872` scalar to `0.19218` raw /
+`0.18799` with train-only binned-residual calibration. It still does not beat
+the current best `0.18497` candidate from the longer baseline schedule, but it
+confirms that reduced dropout is useful and worth combining with a longer
+training schedule.
+
 ## Notes
 
 - These are not final official Matbench test results.
