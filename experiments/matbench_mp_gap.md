@@ -1521,6 +1521,64 @@ relations (`first_diff`, `tree_dist`, and optionally `shared_group_depth`) work
 better as learnable categorical bias embeddings than as continuous sinusoidal
 features.
 
+## Discrete Depth Bias on Dropout Baseline
+
+Run directory:
+
+`checkpoints/20260611_022632_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-discrete-depths
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.22810707737377245`
+- Best raw epoch: `20`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Short-run curve comparison:
+  - Matched dropout baseline E10/E15/E20: `0.29045779890786744` /
+    `0.2529337770222255` / `0.23568223023731574`
+  - Numeric path beta E10/E15/E20: `0.2771256336458818` /
+    `0.23767161282216867` / `0.22815094612611625`
+  - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
+    `0.23928665507798033` / `0.22548361537685974`
+  - Same-parent bias E10/E15/E20: `0.2672322339495805` /
+    `0.23332767412909886` / `0.22355039390925138`
+  - Discrete depth bias E10/E15/E20: `0.2715337269990462` /
+    `0.24170798617673578` / `0.22810707737377245`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9927586206896553`
+- `prediction_bias`: `-0.006689328326811565`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.23800000000000002`
+- Train raw MAE: `0.14354800477083407`
+- Train calibrated MAE: `0.1338551270204161`
+- Internal-val raw MAE: `0.22810451551416833`
+- Internal-val calibrated MAE: `0.22062377767914837`
+- Binned-residual calibrated train MAE: `0.13364277704475555`
+- Binned-residual calibrated internal-val MAE: `0.22038613350896188`
+
+Conclusion: switching `first_diff` and `tree_dist` from continuous sinusoidal
+features to learnable categorical depth embeddings is a clean positive result
+over the matched dropout baseline. It is slightly stronger than the
+`numeric_path_beta` probe at 20 epochs, but weaker than `numeric_path_film` and
+`same_parent`. Because `same_parent` is largely a special case of
+`tree_dist == 2`, the next structural-bias work should avoid stacking the two
+directly and instead separate which generic depth signal benefits most from
+discretization.
+
 ## Notes
 
 - These are not final official Matbench test results.
