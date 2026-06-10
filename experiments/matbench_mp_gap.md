@@ -1307,6 +1307,60 @@ yet evidence of a final improvement over the current 80-epoch best
 or a smaller beta-only variant; it should stay separate from the rejected
 target-prior direction.
 
+## Numeric Path Beta Probe
+
+Run directory:
+
+`checkpoints/20260611_002050_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --numeric-path-beta
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.22815094612611625`
+- Best raw epoch: `20`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Short-run curve comparison:
+  - Matched dropout baseline E10/E15/E20: `0.29045779890786744` /
+    `0.2529337770222255` / `0.23568223023731574`
+  - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
+    `0.23928665507798033` / `0.22548361537685974`
+  - Numeric path beta E10/E15/E20: `0.2771256336458818` /
+    `0.23767161282216867` / `0.22815094612611625`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9947413793103449`
+- `prediction_bias`: `-0.006147264121742598`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.23600000000000002`
+- Train raw MAE: `0.14584798282419445`
+- Train calibrated MAE: `0.13660233288846577`
+- Internal-val raw MAE: `0.2281535316455807`
+- Internal-val calibrated MAE: `0.22108429056684045`
+- Binned-residual calibrated train MAE: `0.13646759015376245`
+- Binned-residual calibrated internal-val MAE: `0.22094347563668637`
+
+Conclusion: the beta-only path-conditioned numeric encoder is a positive
+short-run signal versus the matched dropout baseline, though slightly weaker
+than the full FiLM variant at 20 epochs. The result supports the field-aware
+numeric-encoding direction while suggesting that multiplicative path scaling is
+currently useful. Separately, structural-bias ablations should not be discarded
+only because they fail to beat the strongest dropout run in isolation; small
+positive or mechanism-distinct signals such as `same_parent` should be tested as
+combinations on the current strong baseline.
+
 ## Notes
 
 - These are not final official Matbench test results.
