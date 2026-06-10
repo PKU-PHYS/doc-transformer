@@ -13,7 +13,9 @@ import argparse
 from typing import Optional, List
 import torch
 
+from calibration import apply_calibration_report
 from config import ModelConfig, MODEL_PRESETS, get_configs
+from eval import apply_numeric_postprocessing
 from model.frozen_lm import FrozenLM
 from model.document_transformer import DocumentTransformer
 from model.json_parser import LeafNode, JSONParser
@@ -79,11 +81,13 @@ def predict(model, frozen_lm, doc, device, root_name: str = "doc"):
 
         # 数值预测（默认）
         pred_val = model.decode_head.predict_number(mask_repr).item()
+        pred_val = apply_numeric_postprocessing(pred_val, model.config)
         
         # 零值分类头：logit > 0 (sigmoid > 0.5) → 直接输出 0
         if model.config.use_zero_head:
             zero_logit = model.decode_head.predict_is_zero(mask_repr).item()
-            if zero_logit > 0:
+            zero_logit_threshold = getattr(model.config, "zero_logit_threshold", 0.0)
+            if zero_logit > zero_logit_threshold:
                 pred_val = 0.0
         
         predictions.append((path_str, pred_val))
@@ -99,6 +103,8 @@ def main():
     parser.add_argument("--model-size", type=str, default="large",
                         choices=list(MODEL_PRESETS.keys()),
                         help=f"Model size preset ({', '.join(MODEL_PRESETS.keys())})")
+    parser.add_argument("--calibration", type=str, default=None,
+                        help="Optional calibration JSON from scripts/calibrate_matbench_gap.py")
     args = parser.parse_args()
 
     print("=== Document Transformer Inference ===\n")
@@ -120,6 +126,10 @@ def main():
         print("  ⚠️  No checkpoint found. Running with random weights.\n")
 
     model.eval()
+    if args.calibration:
+        apply_calibration_report(model.config, args.calibration)
+        print(f"  ✅ Loaded calibration: {args.calibration}")
+
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Model: {total_params/1e6:.1f}M params, device={device}\n")
 

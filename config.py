@@ -58,6 +58,9 @@ class ModelConfig:
     prediction_bias: float = 0.0
     # 验证/推理阶段的数值下界；None 表示不裁剪，band gap 可显式设为 0.0
     prediction_min_value: Optional[float] = None
+    # 可选的 train-only 分段 residual 校准映射，在 scale/bias/min 之后插值相加
+    prediction_residual_centers: Optional[list] = None
+    prediction_residual_corrections: Optional[list] = None
     prediction_zero_threshold: Optional[float] = None
     
     # ── 零值分类头 ──

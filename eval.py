@@ -11,6 +11,31 @@ import time
 import torch
 
 
+def _linear_interpolate(x, centers, corrections):
+    if not centers or not corrections or len(centers) != len(corrections):
+        return 0.0
+    if len(centers) == 1 or x <= centers[0]:
+        return float(corrections[0])
+    if x >= centers[-1]:
+        return float(corrections[-1])
+
+    lo = 0
+    hi = len(centers) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if centers[mid] <= x:
+            lo = mid
+        else:
+            hi = mid
+
+    left_x = centers[lo]
+    right_x = centers[hi]
+    if right_x == left_x:
+        return float(corrections[lo])
+    weight = (x - left_x) / (right_x - left_x)
+    return float(corrections[lo] * (1.0 - weight) + corrections[hi] * weight)
+
+
 def apply_numeric_postprocessing(pred_val, config):
     """Apply configured scalar postprocessing to numeric predictions."""
     pred_val = pred_val * getattr(config, "prediction_scale", 1.0)
@@ -18,6 +43,16 @@ def apply_numeric_postprocessing(pred_val, config):
     prediction_min_value = getattr(config, "prediction_min_value", None)
     if prediction_min_value is not None:
         pred_val = max(pred_val, prediction_min_value)
+    residual_centers = getattr(config, "prediction_residual_centers", None)
+    residual_corrections = getattr(config, "prediction_residual_corrections", None)
+    if residual_centers is not None and residual_corrections is not None:
+        pred_val += _linear_interpolate(
+            pred_val,
+            residual_centers,
+            residual_corrections,
+        )
+        if prediction_min_value is not None:
+            pred_val = max(pred_val, prediction_min_value)
     prediction_zero_threshold = getattr(config, "prediction_zero_threshold", None)
     if prediction_zero_threshold is not None and pred_val <= prediction_zero_threshold:
         pred_val = 0.0

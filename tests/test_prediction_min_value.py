@@ -72,6 +72,19 @@ class PredictionMinValueTest(unittest.TestCase):
         self.assertAlmostEqual(apply_numeric_postprocessing(0.18, config), 0.16)
         self.assertAlmostEqual(apply_numeric_postprocessing(0.05, config), 0.0)
 
+    def test_binned_residual_postprocessing_interpolates_before_zero_threshold(self):
+        config = SimpleNamespace(
+            prediction_scale=1.0,
+            prediction_bias=0.0,
+            prediction_min_value=0.0,
+            prediction_residual_centers=[0.0, 1.0, 2.0],
+            prediction_residual_corrections=[0.0, 0.2, -0.2],
+            prediction_zero_threshold=0.15,
+        )
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.5, config), 0.6)
+        self.assertAlmostEqual(apply_numeric_postprocessing(1.5, config), 1.5)
+        self.assertAlmostEqual(apply_numeric_postprocessing(0.05, config), 0.0)
+
     def test_zero_head_threshold_can_gate_zero_prediction(self):
         model = _ConstantModel(
             value=1.0,
