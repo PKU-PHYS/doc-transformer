@@ -18,6 +18,36 @@ Run directory:
 
 `checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
 
+Averaged checkpoint:
+
+`avg_e10_e15.pth`
+
+This averages the two saved low-LR warm-restart checkpoints from epoch 10 and
+epoch 15, then applies the same train-only scalar calibration used elsewhere in
+this file.
+
+Result:
+
+- Raw internal-val MAE: `0.1915938070899512`
+- Calibrated internal-val MAE: `0.18508102969846527`
+- Calibrated train MAE: `0.0510266941334119`
+- `prediction_scale`: `0.9768965517241379`
+- `prediction_bias`: `-0.0003890366042996275`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.08361550587698303`
+- Checkpoint source: weight average of `matbench_mp_gap_train_e10.pth` and
+  `matbench_mp_gap_train_e15.pth`
+
+The previous single-checkpoint best was `0.18526953161707985`, so this is a
+small no-leakage improvement of about `0.00019` MAE on the single official
+fold0 internal-validation split.
+
+## Previous Best Single-Checkpoint Result
+
+Run directory:
+
+`checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
 Warm-restart command:
 
 ```bash
@@ -616,10 +646,55 @@ checkpoint, even before worrying about possible overfit. The simple global
 scale/bias/nonnegative/zero-threshold calibration is still the strongest
 no-leakage output-bias correction tested so far.
 
+## Low-LR Checkpoint Averaging Ablation
+
+Commit:
+
+`9cd3961 feat: add checkpoint averaging utility`
+
+Run directory:
+
+`checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Checkpoint generation commands:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python scripts/average_checkpoints.py \
+  --output checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/avg_best_e10.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_best_val.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_e10.pth
+
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python scripts/average_checkpoints.py \
+  --output checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/avg_e10_e15.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_e10.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_e15.pth
+
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python scripts/average_checkpoints.py \
+  --output checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/avg_best_e10_e15.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_best_val.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_e10.pth \
+  checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_e15.pth
+```
+
+Result:
+
+| Averaged checkpoint | Raw internal-val MAE | Calibrated internal-val MAE |
+| --- | ---: | ---: |
+| `avg_best_e10.pth` | `0.19121448945627767` | `0.18521468148499592` |
+| `avg_e10_e15.pth` | `0.1915938070899512` | `0.18508102969846527` |
+| `avg_best_e10_e15.pth` | `0.19133006325526028` | `0.1851493717075686` |
+
+Conclusion: same-trajectory checkpoint averaging gives a small but clean
+improvement over the previous best single checkpoint. The best candidate is the
+later-tail average `avg_e10_e15.pth`, suggesting that the low-LR trajectory
+contains a slightly better flat-region solution than the raw best-val epoch
+alone.
+
 ## Notes
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
 - The strongest clean improvement so far comes from a longer cosine schedule,
-  the 80-epoch tail resume, a controlled low-LR warm restart, and train-only
-  scale/bias/nonnegative/zero-threshold calibration.
+  the 80-epoch tail resume, a controlled low-LR warm restart, same-trajectory
+  checkpoint averaging, and train-only scale/bias/nonnegative/zero-threshold
+  calibration.
