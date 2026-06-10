@@ -267,6 +267,17 @@ Train-only calibration result:
 The warm restart improves the statistics-feature run, but still does not beat
 the current base-feature low-LR warm-restart best.
 
+Postprocessing check:
+
+- Averaged checkpoint: `avg_e10_e15.pth`
+- Scalar calibrated internal-val MAE: `0.18731926731852908`
+- Binned-residual calibrated internal-val MAE: `0.18726354259815234`
+
+Conclusion: same-trajectory checkpoint averaging plus the later residual
+calibration still leaves the statistics-feature run well behind the base-feature
+candidate. The added feature tokens appear to hurt this fold after the stronger
+schedule/calibration stack is applied.
+
 ## Baseline Reference
 
 Run directory:
