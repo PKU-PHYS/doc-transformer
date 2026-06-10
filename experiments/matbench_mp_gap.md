@@ -707,12 +707,18 @@ residual calibration:
 | `avg_e5_e10.pth` | `0.18533222822378245` | `0.1852857875033103` |
 | `avg_e5_e10_e15.pth` | `0.18520787081540352` | `0.1851468613929959` |
 
+Prediction-level ensemble check with E10 and E15 checkpoints:
+
+- Scalar calibrated internal-val MAE: `0.18508245778908303`
+- Binned-residual calibrated internal-val MAE: `0.18500007567257207`
+
 Conclusion: same-trajectory checkpoint averaging gives a small but clean
 improvement over the previous best single checkpoint. The best candidate is the
 later-tail average `avg_e10_e15.pth`, suggesting that the low-LR trajectory
 contains a slightly better flat-region solution than the raw best-val epoch
 alone. Mixing in the earlier E5 checkpoint degrades both scalar and residual
-calibrated results.
+calibrated results. Prediction-level ensembling of E10/E15 is close, but it is
+slightly weaker than weight averaging after residual calibration.
 
 ## Second Low-LR Warm Restart From Averaged Checkpoint
 
