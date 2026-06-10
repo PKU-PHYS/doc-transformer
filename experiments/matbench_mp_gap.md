@@ -16,6 +16,44 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
+`checkpoints/20260610_204411_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Checkpoint:
+
+`matbench_mp_gap_train_best_val.pth`
+
+This is a single checkpoint from an 80-epoch `dropout=0.05` cosine-schedule
+run. It applies train-only scalar calibration plus a conservative binned
+residual correction fitted only on the official train subset. No held-out test
+targets are loaded or used.
+
+Result:
+
+- Raw internal-val MAE: `0.18445097342720354`
+- Raw best epoch: `74`
+- Final epoch raw internal-val MAE: `0.18463109290718835`
+- Scalar calibrated internal-val MAE: `0.18119688913386592`
+- Binned-residual calibrated internal-val MAE: `0.18117659119360632`
+- Binned-residual calibrated train MAE: `0.028336464163975245`
+- `prediction_scale`: `0.9868103448275862`
+- `prediction_bias`: `0.0002859855594980563`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.056`
+- Binned-residual bins: `6`
+- Binned-residual shrinkage: `5000.0`
+- Binned-residual zero threshold: `0.05`
+- Checkpoint source: single best-val checkpoint, not a checkpoint average
+
+This improves the previous clean internal-validation best from `0.18496898` to
+`0.18117659`, a no-leakage single-fold gain of about `0.00379` MAE. The raw
+single-checkpoint MAE (`0.18445`) also beats the previous calibrated
+checkpoint-averaged result, so the gain is primarily from the structural
+training change rather than post-hoc averaging.
+
+## Previous Checkpoint-Averaged Result
+
+Run directory:
+
 `checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
 
 Averaged checkpoint:
@@ -41,10 +79,6 @@ Result:
 - Binned-residual zero threshold: `0.066`
 - Checkpoint source: weight average of `matbench_mp_gap_train_e10.pth` and
   `matbench_mp_gap_train_e15.pth`
-
-The previous scalar-calibrated averaged-checkpoint best was
-`0.18508102969846527`, so this is another small no-leakage improvement of about
-`0.00011` MAE on the single official fold0 internal-validation split.
 
 ## Previous Best Single-Checkpoint Result
 
@@ -1027,11 +1061,57 @@ the current best `0.18497` candidate from the longer baseline schedule, but it
 confirms that reduced dropout is useful and worth combining with a longer
 training schedule.
 
+## Dropout 0.05 80-Epoch Long Schedule
+
+Run directory:
+
+`checkpoints/20260610_204411_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.18445097342720354`
+- Best raw epoch: `74`
+- Final epoch raw internal-val MAE: `0.18463109290718835`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9868103448275862`
+- `prediction_bias`: `0.0002859855594980563`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.056`
+- Train raw MAE: `0.03619367770028811`
+- Train calibrated MAE: `0.028306797247887622`
+- Internal-val raw MAE: `0.18447844981848474`
+- Internal-val calibrated MAE: `0.18119688913386592`
+- Binned-residual calibrated train MAE: `0.028336464163975245`
+- Binned-residual calibrated internal-val MAE: `0.18117659119360632`
+
+Conclusion: combining the lower dropout (`0.05`) with the full 80-epoch cosine
+schedule is the first clear structural improvement past the previous
+checkpoint-averaged `0.18497` result. The raw single-checkpoint validation MAE
+already reaches `0.18445`, and train-only scalar calibration brings the matched
+single-fold internal validation result to `0.18120`. The binned residual
+correction is negligible here (`0.18120` → `0.18118`), so the main gain is from
+training dynamics rather than post-processing.
+
 ## Notes
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
-- The strongest clean improvement so far comes from a longer cosine schedule,
-  the 80-epoch tail resume, a controlled low-LR warm restart, same-trajectory
-  checkpoint averaging, and train-only scale/bias/nonnegative/zero-threshold
-  plus binned-residual calibration.
+- The strongest clean improvement so far comes from lowering dropout to `0.05`
+  and training the same single checkpoint for an 80-epoch cosine schedule,
+  followed by train-only scale/bias/nonnegative/zero-threshold calibration.
