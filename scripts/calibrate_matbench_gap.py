@@ -195,6 +195,82 @@ def _apply_binned_residual(preds, mapping, min_value):
     return corrected
 
 
+def _parse_int_list(text):
+    return [int(part) for part in text.split(",") if part]
+
+
+def _parse_float_list(text):
+    return [float(part) for part in text.split(",") if part]
+
+
+def _fit_cv_binned_residual(
+    preds,
+    targets,
+    *,
+    bins_grid,
+    shrinkage_grid,
+    n_folds,
+    min_bin_size,
+    min_value,
+):
+    indices = np.arange(len(preds))
+    folds = np.array_split(indices, n_folds)
+    candidates = []
+    best = None
+
+    for n_bins in bins_grid:
+        for shrinkage in shrinkage_grid:
+            fold_maes = []
+            for fold_idx, valid_idx in enumerate(folds):
+                train_idx = np.concatenate(
+                    [folds[i] for i in range(n_folds) if i != fold_idx]
+                )
+                mapping = _fit_binned_residual(
+                    preds[train_idx],
+                    targets[train_idx],
+                    n_bins=n_bins,
+                    min_bin_size=min_bin_size,
+                    shrinkage=shrinkage,
+                )
+                valid_preds = _apply_binned_residual(
+                    preds[valid_idx],
+                    mapping,
+                    min_value,
+                )
+                threshold, _ = _fit_zero_threshold(
+                    _apply_binned_residual(
+                        preds[train_idx],
+                        mapping,
+                        min_value,
+                    ),
+                    targets[train_idx],
+                )
+                valid_preds = _postprocess_array(
+                    valid_preds,
+                    zero_threshold=threshold,
+                )
+                fold_maes.append(_mae(valid_preds, targets[valid_idx]))
+
+            candidate = {
+                "bins": int(n_bins),
+                "shrinkage": float(shrinkage),
+                "fold_mae": [float(score) for score in fold_maes],
+                "mean_mae": float(np.mean(fold_maes)),
+            }
+            candidates.append(candidate)
+            if best is None or candidate["mean_mae"] < best["mean_mae"]:
+                best = candidate
+
+    final_mapping = _fit_binned_residual(
+        preds,
+        targets,
+        n_bins=best["bins"],
+        min_bin_size=min_bin_size,
+        shrinkage=best["shrinkage"],
+    )
+    return best, candidates, final_mapping
+
+
 def _load_run_metadata_for_checkpoint(checkpoint_path):
     metadata_path = pathlib.Path(checkpoint_path).with_name("run_metadata.json")
     if not metadata_path.exists():
@@ -291,6 +367,14 @@ def main():
     parser.add_argument("--binned-residual-bins", type=int, default=8)
     parser.add_argument("--binned-residual-min-bin-size", type=int, default=1000)
     parser.add_argument("--binned-residual-shrinkage", type=float, default=5000.0)
+    parser.add_argument(
+        "--also-fit-cv-binned-residual",
+        action="store_true",
+        help="Select binned residual hyperparameters by train-only K-fold CV",
+    )
+    parser.add_argument("--cv-binned-residual-bins", default="4,6,8")
+    parser.add_argument("--cv-binned-residual-shrinkage", default="5000,10000")
+    parser.add_argument("--cv-binned-residual-folds", type=int, default=5)
     register_matbench_args(parser)
     args = parser.parse_args()
     validate_matbench_args(args, parser)
@@ -550,6 +634,79 @@ def main():
             },
         }
 
+    if args.also_fit_cv_binned_residual:
+        train_scale_bias_clipped = _postprocess_array(
+            train_preds,
+            scale=scale,
+            bias=bias,
+            min_value=args.prediction_min_value,
+        )
+        val_scale_bias_clipped = _postprocess_array(
+            val_preds,
+            scale=scale,
+            bias=bias,
+            min_value=args.prediction_min_value,
+        )
+        bins_grid = _parse_int_list(args.cv_binned_residual_bins)
+        shrinkage_grid = _parse_float_list(args.cv_binned_residual_shrinkage)
+        cv_best, cv_candidates, cv_mapping = _fit_cv_binned_residual(
+            train_scale_bias_clipped,
+            train_targets,
+            bins_grid=bins_grid,
+            shrinkage_grid=shrinkage_grid,
+            n_folds=args.cv_binned_residual_folds,
+            min_bin_size=args.binned_residual_min_bin_size,
+            min_value=args.prediction_min_value,
+        )
+        train_cv_preds = _apply_binned_residual(
+            train_scale_bias_clipped,
+            cv_mapping,
+            args.prediction_min_value,
+        )
+        val_cv_preds = _apply_binned_residual(
+            val_scale_bias_clipped,
+            cv_mapping,
+            args.prediction_min_value,
+        )
+        cv_zero_threshold, cv_train_threshold_mae = _fit_zero_threshold(
+            train_cv_preds,
+            train_targets,
+        )
+        train_cv_calibrated = _postprocess_array(
+            train_cv_preds,
+            zero_threshold=cv_zero_threshold,
+        )
+        val_cv_calibrated = _postprocess_array(
+            val_cv_preds,
+            zero_threshold=cv_zero_threshold,
+        )
+        report.setdefault("alternative_calibrations", {})["cv_binned_residual"] = {
+            "fit_policy": {
+                "method": "train-only K-fold selection of binned residual calibration",
+                "input": "scale/bias/min-clamped predictions fitted on train only",
+                "target": "official train-only targets",
+                "bins_grid": bins_grid,
+                "shrinkage_grid": shrinkage_grid,
+                "folds": args.cv_binned_residual_folds,
+                "min_bin_size": args.binned_residual_min_bin_size,
+                "zero_threshold": "refit on full train after CV hyperparameter selection",
+                "test_targets": "omitted",
+            },
+            "selection": {
+                "best": cv_best,
+                "candidates": cv_candidates,
+            },
+            "mapping": cv_mapping,
+            "calibration": {
+                "prediction_zero_threshold": cv_zero_threshold,
+                "train_threshold_fit_mae": cv_train_threshold_mae,
+            },
+            "metrics": {
+                "train": _summarize_precomputed(train_cv_calibrated, train_targets),
+                "val": _summarize_precomputed(val_cv_calibrated, val_targets),
+            },
+        }
+
     output = args.output
     if output is None:
         checkpoint_path = pathlib.Path(args.checkpoint)
@@ -565,6 +722,8 @@ def main():
         print(json.dumps(report["alternative_calibrations"]["isotonic"]["metrics"], indent=2))
     if args.also_fit_binned_residual:
         print(json.dumps(report["alternative_calibrations"]["binned_residual"], indent=2))
+    if args.also_fit_cv_binned_residual:
+        print(json.dumps(report["alternative_calibrations"]["cv_binned_residual"], indent=2))
     print(f"Saved calibration report: {output_path}")
 
 
