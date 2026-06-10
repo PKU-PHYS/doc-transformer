@@ -1361,6 +1361,60 @@ only because they fail to beat the strongest dropout run in isolation; small
 positive or mechanism-distinct signals such as `same_parent` should be tested as
 combinations on the current strong baseline.
 
+## Same-Parent Bias on Dropout Baseline
+
+Run directory:
+
+`checkpoints/20260611_003857_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-same-parent
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.22355039390925138`
+- Best raw epoch: `20`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Short-run curve comparison:
+  - Matched dropout baseline E10/E15/E20: `0.29045779890786744` /
+    `0.2529337770222255` / `0.23568223023731574`
+  - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
+    `0.23928665507798033` / `0.22548361537685974`
+  - Numeric path beta E10/E15/E20: `0.2771256336458818` /
+    `0.23767161282216867` / `0.22815094612611625`
+  - Same-parent bias E10/E15/E20: `0.2672322339495805` /
+    `0.23332767412909886` / `0.22355039390925138`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9947413793103449`
+- `prediction_bias`: `-0.0060340707234492336`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.242`
+- Train raw MAE: `0.13682169227984667`
+- Train calibrated MAE: `0.12724007723483796`
+- Internal-val raw MAE: `0.22355356949276195`
+- Internal-val calibrated MAE: `0.21613417406257987`
+- Binned-residual calibrated train MAE: `0.1270392292145749`
+- Binned-residual calibrated internal-val MAE: `0.21581298228973428`
+
+Conclusion: `same_parent` is a real positive structural-bias signal when tested
+as a combination on the current strong dropout baseline. The earlier isolated
+result did not beat the 80-epoch best, but that was too strict a filter for
+combination candidates. At 20 epochs, this run beats the matched dropout
+baseline and both path-conditioned numeric-encoding probes. The next controlled
+combination should test whether `same_parent` composes with `numeric_path_film`.
+
 ## Notes
 
 - These are not final official Matbench test results.
