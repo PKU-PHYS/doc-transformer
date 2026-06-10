@@ -115,9 +115,6 @@ _MATBENCH_OPTIONS = [
     ("--add-mean-bonds",   {"action": argparse.BooleanOptionalAction, "default": None,
                             "help": "[Matbench] Add per-element-pair mean bond distance (bonds_stats)"},
      "add_mean_bonds"),
-    ("--add-target-prior", {"action": argparse.BooleanOptionalAction, "default": None,
-                            "help": "[Matbench] Add a train-only OOF composition/lattice target prior token"},
-     "add_target_prior"),
 ]
 
 # option_key → cache_tag 后缀
@@ -136,7 +133,6 @@ _OPTION_CACHE_TAGS = {
     "add_comp_ewald_stats": "_cewalds",
     "add_comp_nn_stats": "_cnns",
     "add_mean_bonds": "_mbonds",
-    "add_target_prior": "_tprior",
 }
 
 
@@ -183,3 +179,4 @@ def build_cache_tag(dataset_options: dict) -> str:
         if dataset_options.get(option_key):
             tag += suffix
     return tag
+

@@ -15,7 +15,7 @@ import random
 import warnings
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Optional, Sequence, Tuple
+from typing import List, Dict, Optional, Tuple
 
 from data.matbench.splits import (
     coerce_ids_to_index_type,
@@ -686,7 +686,6 @@ class MatbenchLoader:
         add_comp_ewald_stats = opts.get("add_comp_ewald_stats", False)
         add_comp_nn_stats = opts.get("add_comp_nn_stats", False)
         add_mean_bonds = opts.get("add_mean_bonds", False)
-        add_target_prior = opts.get("add_target_prior", False)
 
         # ── 尝试加载缓存 ──
         cache_path = self._cache_path(task_name, max_tokens, add_angles,
@@ -696,7 +695,7 @@ class MatbenchLoader:
                                       add_comp_ewald, add_spacegroup, add_nn_stats,
                                       add_density, add_comp_nn,
                                       add_comp_ewald_stats, add_comp_nn_stats,
-                                      add_mean_bonds, add_target_prior, seed,
+                                      add_mean_bonds, seed,
                                       split_strategy, fold, val_ratio, test_ratio,
                                       include_test_targets)
         if cache_path.exists():
@@ -711,34 +710,6 @@ class MatbenchLoader:
             print(f"  ✅ Loaded {len(self.train_docs)} train / "
                   f"{len(self.val_docs)} val / {len(self.test_docs)} test from cache")
             return
-        if add_target_prior:
-            base_cache_path = self._cache_path(
-                task_name, max_tokens, add_angles,
-                add_bonds, max_bonds,
-                add_composition, drop_coords,
-                add_ewald, add_element_props,
-                add_comp_ewald, add_spacegroup, add_nn_stats,
-                add_density, add_comp_nn,
-                add_comp_ewald_stats, add_comp_nn_stats,
-                add_mean_bonds, False, seed,
-                split_strategy, fold, val_ratio, test_ratio,
-                include_test_targets,
-            )
-            if base_cache_path.exists():
-                print(f"  💾 Loading base cached data: {base_cache_path}")
-                import pickle
-                with open(base_cache_path, "rb") as f:
-                    cached = pickle.load(f)
-                self.train_docs = cached["train_docs"]
-                self.val_docs = cached.get("val_docs", [])
-                self.test_docs = cached["test_docs"]
-                self.split_metadata = cached.get("split_metadata", {})
-                self._add_target_priors(seed=seed)
-                print(f"  ✅ Loaded {len(self.train_docs)} train / "
-                      f"{len(self.val_docs)} val / {len(self.test_docs)} test "
-                      "from base cache + target_prior")
-                self._save_cache(cache_path)
-                return
 
         # ── 加载数据 ──
         print(f"  📂 Loading Matbench task: {task_name}")
@@ -775,8 +746,6 @@ class MatbenchLoader:
             extras.append("add_comp_nn_stats")
         if add_mean_bonds:
             extras.append("add_mean_bonds")
-        if add_target_prior:
-            extras.append("add_target_prior")
         extras_msg = f", {', '.join(extras)}" if extras else ""
         print(f"  ⏳ Converting structures to JSON "
               f"(max_tokens={max_tokens}{extras_msg})...")
@@ -846,8 +815,6 @@ class MatbenchLoader:
             test_ratio=test_ratio,
             seed=seed,
         )
-        if add_target_prior:
-            self._add_target_priors(seed=seed)
         print(f"  📊 Split: {len(self.train_docs)} train / "
               f"{len(self.val_docs)} val / {len(self.test_docs)} test")
 
@@ -869,7 +836,7 @@ class MatbenchLoader:
                     add_spacegroup, add_nn_stats, add_density,
                     add_comp_nn,
                     add_comp_ewald_stats, add_comp_nn_stats,
-                    add_mean_bonds, add_target_prior, seed,
+                    add_mean_bonds, seed,
                     split_strategy, fold, val_ratio, test_ratio,
                     include_test_targets):
         """生成缓存文件路径（包含所有影响数据内容的参数）。"""
@@ -889,7 +856,6 @@ class MatbenchLoader:
         cewalds_tag = "_cewalds" if add_comp_ewald_stats else ""
         cnns_tag = "_cnns" if add_comp_nn_stats else ""
         mbonds_tag = "_mbonds" if add_mean_bonds else ""
-        tprior_tag = "_tprior" if add_target_prior else ""
         if split_strategy == "official":
             split_tag = f"_official_f{fold}_val{val_ratio:g}"
         elif split_strategy == "random":
@@ -897,7 +863,7 @@ class MatbenchLoader:
         else:
             raise ValueError(f"Unknown split_strategy={split_strategy!r}")
         test_target_tag = "_testtargets" if include_test_targets else "_blindtest"
-        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{dropcoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}{tprior_tag}{split_tag}{test_target_tag}_seed{seed}.pkl"
+        return cache_dir / f"{task_name}_t{max_tokens}{angles_tag}{bonds_tag}{comp_tag}{dropcoords_tag}{ewald_tag}{elprops_tag}{comp_ewald_tag}{sg_tag}{dens_tag}{nn_tag}{cnn_tag}{cewalds_tag}{cnns_tag}{mbonds_tag}{split_tag}{test_target_tag}_seed{seed}.pkl"
 
     def _split_docs(self, df, docs, target_col, test_ratio: float, seed: int):
         """Populate train_docs/val_docs/test_docs with no test leakage."""
@@ -967,185 +933,6 @@ class MatbenchLoader:
             self.split_metadata["test_targets"] = "omitted"
         else:
             self.split_metadata["test_targets"] = "included"
-
-    @staticmethod
-    def _target_prior_elements(train_docs: Sequence[dict]) -> List[str]:
-        """Element vocabulary for the train-only target-prior model."""
-        return sorted({
-            entry["element"]
-            for doc in train_docs
-            for entry in doc.get("composition", [])
-            if "element" in entry
-        })
-
-    @staticmethod
-    def _target_prior_features(docs: Sequence[dict],
-                               elements: Sequence[str]) -> np.ndarray:
-        """Build compact composition/lattice features without reading targets."""
-        elem_to_idx = {elem: i for i, elem in enumerate(elements)}
-        p = len(elements)
-        # ratio, ratio^2, ratio*ewald, ratio*nn, present, plus globals.
-        n_global = 24
-        x = np.zeros((len(docs), p * 5 + n_global), dtype=np.float32)
-
-        for row, doc in enumerate(docs):
-            ratios = []
-            ewalds = []
-            nns = []
-            for entry in doc.get("composition", []):
-                elem = entry.get("element")
-                idx = elem_to_idx.get(elem)
-                if idx is None:
-                    continue
-                ratio = float(entry.get("ratio", 0.0))
-                ewald = float(entry.get("ewald", 0.0))
-                nn = float(entry.get("nn", 0.0))
-                x[row, idx] = ratio
-                x[row, p + idx] = ratio * ratio
-                x[row, 2 * p + idx] = ratio * ewald
-                x[row, 3 * p + idx] = ratio * nn
-                x[row, 4 * p + idx] = 1.0
-                ratios.append(ratio)
-                ewalds.append(ewald)
-                nns.append(nn)
-
-            off = p * 5
-            lattice = doc.get("lattice", {})
-            a = float(lattice.get("a", 0.0))
-            b = float(lattice.get("b", 0.0))
-            c = float(lattice.get("c", 0.0))
-            alpha = float(lattice.get("alpha", 0.0))
-            beta = float(lattice.get("beta", 0.0))
-            gamma = float(lattice.get("gamma", 0.0))
-            x[row, off:off + 6] = [a, b, c, alpha, beta, gamma]
-            positive_lengths = [v for v in (a, b, c) if v > 0.0]
-            if len(positive_lengths) == 3:
-                x[row, off + 6] = a * b * c
-                x[row, off + 7] = max(positive_lengths) / min(positive_lengths)
-
-            if ratios:
-                ratios_arr = np.asarray(ratios, dtype=np.float32)
-                ewalds_arr = np.asarray(ewalds, dtype=np.float32)
-                nns_arr = np.asarray(nns, dtype=np.float32)
-                x[row, off + 8] = len(ratios_arr)
-                x[row, off + 9] = float(np.sum(ratios_arr * ratios_arr))
-                x[row, off + 10] = float(np.max(ratios_arr))
-                x[row, off + 11] = float(
-                    -np.sum(ratios_arr * np.log(np.maximum(ratios_arr, 1e-12)))
-                )
-                for base, vals in ((12, ewalds_arr), (16, nns_arr)):
-                    x[row, off + base] = float(np.sum(ratios_arr * vals))
-                    x[row, off + base + 1] = float(np.mean(vals))
-                    x[row, off + base + 2] = float(np.min(vals))
-                    x[row, off + base + 3] = float(np.max(vals))
-
-            x[row, off + 20] = float(doc.get("density", 0.0) or 0.0)
-            x[row, off + 21] = float(doc.get("vol_per_atom", 0.0) or 0.0)
-            x[row, off + 22] = float(doc.get("nn_min", 0.0) or 0.0)
-            x[row, off + 23] = float(doc.get("nn_mean", 0.0) or 0.0)
-
-        return x
-
-    @staticmethod
-    def _make_target_prior_model(seed: int):
-        from sklearn.ensemble import HistGradientBoostingRegressor
-
-        return HistGradientBoostingRegressor(
-            loss="squared_error",
-            max_iter=160,
-            learning_rate=0.06,
-            l2_regularization=0.1,
-            max_leaf_nodes=31,
-            min_samples_leaf=30,
-            random_state=seed,
-            validation_fraction=None,
-            early_stopping=False,
-        )
-
-    @staticmethod
-    def _with_target_prior(docs: Sequence[dict],
-                           predictions: Sequence[float]) -> List[dict]:
-        updated = []
-        for doc, pred in zip(docs, predictions):
-            target_prior = round(max(0.0, float(pred)), 6)
-            copied = {}
-            for key, value in doc.items():
-                if key == "target":
-                    copied["target_prior"] = target_prior
-                copied[key] = value
-            if "target" not in copied:
-                copied["target_prior"] = target_prior
-            updated.append(copied)
-        return updated
-
-    def _add_target_priors(self, seed: int):
-        """Attach a train-only target-prior token without target leakage.
-
-        Train docs receive out-of-fold predictions, so a sample's own target is
-        never used to build its prior.  Validation/test docs receive predictions
-        from a model fit on the full training split only.
-        """
-        if not self.train_docs:
-            return
-        if any(self.target_key not in doc for doc in self.train_docs):
-            raise RuntimeError("Cannot fit target_prior: train targets are missing")
-
-        from sklearn.model_selection import KFold
-        from sklearn.metrics import mean_absolute_error
-
-        y_train = np.asarray(
-            [float(doc[self.target_key]) for doc in self.train_docs],
-            dtype=np.float32,
-        )
-        elements = self._target_prior_elements(self.train_docs)
-        x_train = self._target_prior_features(self.train_docs, elements)
-        n_splits = min(5, len(self.train_docs))
-        oof = np.zeros(len(self.train_docs), dtype=np.float32)
-
-        if n_splits >= 2:
-            kfold = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-            for fold_idx, (fit_idx, pred_idx) in enumerate(kfold.split(x_train)):
-                model = self._make_target_prior_model(seed + fold_idx)
-                model.fit(x_train[fit_idx], y_train[fit_idx])
-                oof[pred_idx] = model.predict(x_train[pred_idx])
-        else:
-            oof.fill(float(np.mean(y_train)))
-
-        final_model = self._make_target_prior_model(seed + 1000)
-        final_model.fit(x_train, y_train)
-
-        x_val = self._target_prior_features(self.val_docs, elements)
-        x_test = self._target_prior_features(self.test_docs, elements)
-        val_prior = final_model.predict(x_val) if len(self.val_docs) else []
-        test_prior = final_model.predict(x_test) if len(self.test_docs) else []
-
-        self.train_docs = self._with_target_prior(self.train_docs, oof)
-        self.val_docs = self._with_target_prior(self.val_docs, val_prior)
-        self.test_docs = self._with_target_prior(self.test_docs, test_prior)
-
-        train_oof_mae = mean_absolute_error(y_train, np.maximum(0.0, oof))
-        val_mae = None
-        if self.val_docs and all(self.target_key in doc for doc in self.val_docs):
-            y_val = np.asarray(
-                [float(doc[self.target_key]) for doc in self.val_docs],
-                dtype=np.float32,
-            )
-            val_mae = mean_absolute_error(y_val, np.maximum(0.0, val_prior))
-
-        self.split_metadata["target_prior"] = {
-            "method": "HistGradientBoostingRegressor composition/lattice features",
-            "train_predictions": f"{n_splits}-fold out-of-fold",
-            "val_test_predictions": "fit on train split only",
-            "n_train": len(self.train_docs),
-            "n_elements": len(elements),
-            "train_oof_mae": float(train_oof_mae),
-            "val_mae": None if val_mae is None else float(val_mae),
-            "test_targets": self.split_metadata.get("test_targets", "unknown"),
-        }
-        msg = f"  🎚️  Target prior: train OOF MAE={train_oof_mae:.4f}"
-        if val_mae is not None:
-            msg += f", val MAE={val_mae:.4f}"
-        print(msg)
 
     def _save_cache(self, cache_path):
         """将转换好的数据保存到磁盘。"""
