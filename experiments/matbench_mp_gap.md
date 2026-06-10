@@ -853,6 +853,13 @@ Train-only CV selection check:
 - Internal-val MAE after refitting selected mapping on all train:
   `0.18498948106981508`
 
+Fixed-edge residual check:
+
+- Edges: `0,0.01,0.05,0.15,0.5,1,2,4,8`
+- Scalar calibrated internal-val MAE: `0.1850822293877643`
+- Fixed-edge residual internal-val MAE: `0.18502181266380344`
+- Fixed-edge residual train MAE: `0.05057749182759186`
+
 Conclusion: a small, shrinkage-regularized residual correction improves the
 averaged checkpoint without using held-out test labels. The best single-fold
 candidate uses 6 quantile bins and shrinkage 5000; the nearby settings also
@@ -862,7 +869,8 @@ while preserving `avg_e10_e15.pth` as the best candidate. The train-only CV
 selection chooses the neighboring `8 bins, shrinkage 5000` setting and lands at
 `0.18498948106981508`, which is slightly weaker than the single-fold best but
 supports the residual-calibration effect without using val to choose the
-hyperparameters.
+hyperparameters. Fixed physical-looking edges lower train MAE more aggressively
+but generalize worse than quantile bins on internal validation.
 
 ## Notes
 
