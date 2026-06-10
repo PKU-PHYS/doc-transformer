@@ -690,6 +690,47 @@ later-tail average `avg_e10_e15.pth`, suggesting that the low-LR trajectory
 contains a slightly better flat-region solution than the raw best-val epoch
 alone.
 
+## Second Low-LR Warm Restart From Averaged Checkpoint
+
+Run directory:
+
+`checkpoints/20260610_130805_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Warm-restart command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 12 --patience 12 --max-cpu-workers 4 \
+  --checkpoint-interval 4 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --resume checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/avg_e10_e15.pth \
+  --warm-restart --lr 1e-6
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.1913256779724466`
+- Best raw epoch: `7`
+- Final epoch raw internal-val MAE: `0.19169478168120715`
+- GPU peak during training: about `2.0G`
+
+Train-only calibration result:
+
+- Best-val checkpoint calibrated internal-val MAE: `0.18530835251332392`
+- Best-val checkpoint calibrated train MAE: `0.051135470277544795`
+- Average of previous best and new best calibrated internal-val MAE:
+  `0.18519139201333076`
+- Average of previous best and new best calibrated train MAE:
+  `0.05101651318911314`
+
+Conclusion: the second lower-LR warm restart did not improve on the
+same-trajectory checkpoint average (`0.18508102969846527`). It slightly improved
+raw MAE relative to the averaged checkpoint but moved the train-only calibration
+in the wrong direction, so this path is not the next best use of compute.
+
 ## Notes
 
 - These are not final official Matbench test results.
