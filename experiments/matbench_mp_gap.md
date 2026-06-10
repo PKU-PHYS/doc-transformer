@@ -688,11 +688,20 @@ Result:
 | `avg_e10_e15.pth` | `0.1915938070899512` | `0.18508102969846527` |
 | `avg_best_e10_e15.pth` | `0.19133006325526028` | `0.1851493717075686` |
 
+Early-checkpoint averaging check with the later `6 bins, shrinkage 5000`
+residual calibration:
+
+| Averaged checkpoint | Scalar val MAE | Residual val MAE |
+| --- | ---: | ---: |
+| `avg_e5_e10.pth` | `0.18533222822378245` | `0.1852857875033103` |
+| `avg_e5_e10_e15.pth` | `0.18520787081540352` | `0.1851468613929959` |
+
 Conclusion: same-trajectory checkpoint averaging gives a small but clean
 improvement over the previous best single checkpoint. The best candidate is the
 later-tail average `avg_e10_e15.pth`, suggesting that the low-LR trajectory
 contains a slightly better flat-region solution than the raw best-val epoch
-alone.
+alone. Mixing in the earlier E5 checkpoint degrades both scalar and residual
+calibrated results.
 
 ## Second Low-LR Warm Restart From Averaged Checkpoint
 
