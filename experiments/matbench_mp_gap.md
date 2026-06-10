@@ -1159,6 +1159,54 @@ from `0.18445` to `0.18416`, but it does not improve the calibrated score
 long-schedule checkpoint is already near its calibrated optimum; it should not
 replace the current best.
 
+## Same-Path-Template Structural Bias
+
+Run directory:
+
+`checkpoints/20260610_220232_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-same-path-template
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19534491940074195`
+- Best raw epoch: `49`
+- Final epoch raw internal-val MAE: `0.19534491940074195`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `-0.0015172184533279005`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.098`
+- Train raw MAE: `0.05339481046868737`
+- Train calibrated MAE: `0.045237716025358476`
+- Internal-val raw MAE: `0.19533241128744447`
+- Internal-val calibrated MAE: `0.1905814128853145`
+- Binned-residual calibrated train MAE: `0.0452635286399252`
+- Binned-residual calibrated internal-val MAE: `0.19061356858935802`
+
+Conclusion: `same_path_template` is a clean JSON-structural signal and is
+slightly stronger than the earlier `same_parent` structural-bias ablation, but
+it does not beat the matched 50-epoch dropout baseline (`0.192998` raw /
+`0.188722` calibrated) and is far behind the current 80-epoch dropout best
+(`0.181177` calibrated). The next bias experiment should keep this separated
+from other new signals and test `value_type_pair` alone, because it addresses a
+different generic relation: the directed attention role between numeric,
+string, boolean, and mask tokens.
+
 ## Notes
 
 - These are not final official Matbench test results.
