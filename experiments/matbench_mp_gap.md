@@ -1108,6 +1108,57 @@ single-fold internal validation result to `0.18120`. The binned residual
 correction is negligible here (`0.18120` → `0.18118`), so the main gain is from
 training dynamics rather than post-processing.
 
+## Dropout 0.05 80-Epoch Low-LR Warm Restart
+
+Run directory:
+
+`checkpoints/20260610_213910_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Source checkpoint:
+
+`checkpoints/20260610_204411_matbench_mp_gap_comp_cewald_cnn_dropcoords/matbench_mp_gap_train_best_val.pth`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --resume checkpoints/20260610_204411_matbench_mp_gap_comp_cewald_cnn_dropcoords/matbench_mp_gap_train_best_val.pth \
+  --warm-restart \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 5 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --lr 2e-6
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.18415902546685092`
+- Best raw epoch: `6`
+- Final epoch raw internal-val MAE: `0.18426521545898678`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `-0.0011113769174071737`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.052000000000000005`
+- Train raw MAE: `0.034357663771868004`
+- Train calibrated MAE: `0.027655111099689`
+- Internal-val raw MAE: `0.1841691656442252`
+- Internal-val calibrated MAE: `0.18122382824986974`
+- Binned-residual calibrated train MAE: `0.027655089714201695`
+- Binned-residual calibrated internal-val MAE: `0.1812252191894463`
+
+Conclusion: the low-LR warm restart slightly improves the raw validation MAE
+from `0.18445` to `0.18416`, but it does not improve the calibrated score
+(`0.18122` vs the current `0.18118`). This is a useful sanity check that the
+long-schedule checkpoint is already near its calibrated optimum; it should not
+replace the current best.
+
 ## Notes
 
 - These are not final official Matbench test results.
