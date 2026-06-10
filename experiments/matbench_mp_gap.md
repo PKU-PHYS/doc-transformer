@@ -1254,6 +1254,59 @@ direction is input-side numeric representation, especially making numeric
 encoding aware of the field/path context rather than adding more target-derived
 or output-only corrections.
 
+## Numeric Path FiLM Probe
+
+Run directory:
+
+`checkpoints/20260610_232345_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --numeric-path-film
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.22548361537685974`
+- Best raw epoch: `20`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Short-run curve comparison:
+  - Matched dropout baseline E10/E15/E20: `0.29045779890786744` /
+    `0.2529337770222255` / `0.23568223023731574`
+  - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
+    `0.23928665507798033` / `0.22548361537685974`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9947413793103449`
+- `prediction_bias`: `-0.003990163869658035`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.23600000000000002`
+- Train raw MAE: `0.14209556640475754`
+- Train calibrated MAE: `0.13341964200018178`
+- Internal-val raw MAE: `0.22549287994336392`
+- Internal-val calibrated MAE: `0.21875686652256626`
+- Binned-residual calibrated train MAE: `0.1333308648807274`
+- Binned-residual calibrated internal-val MAE: `0.21860361977455064`
+
+Conclusion: `numeric_path_film` is a clean input-side numeric representation
+change, not a target-derived prior or output-only correction. It is initialized
+to preserve the old numeric encoder at step 0, then learns field-conditioned
+scale/shift terms from the JSON path embedding for number tokens. The 20-epoch
+probe is ahead of the matched dropout baseline at the same epoch, but it is not
+yet evidence of a final improvement over the current 80-epoch best
+(`0.181177` binned calibrated). This direction is worth a longer controlled run
+or a smaller beta-only variant; it should stay separate from the rejected
+target-prior direction.
+
 ## Notes
 
 - These are not final official Matbench test results.
