@@ -1734,6 +1734,56 @@ combination remains best. This keeps FiLM as a useful generic numeric-path
 bias, but suggests it needs the discrete depth encoding to produce the best
 fold0 interaction.
 
+## Discrete Depth Plus Numeric Path FiLM 80-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_060200_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-path-film --bias-discrete-depths
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.18776998618917828`
+- Best raw epoch: `75`
+- Final epoch raw internal-val MAE: `0.18830131182724483`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.18947460201829303` /
+    `0.18985934007631142` / `0.18899139986592828` /
+    `0.18776998618917828` / `0.18830131182724483`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9749137931034483`
+- `prediction_bias`: `0.0022739766123865187`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.06973106137476874`
+- Train raw MAE: `0.057141752507096945`
+- Train calibrated MAE: `0.04282554916595107`
+- Internal-val raw MAE: `0.1877844599754231`
+- Internal-val calibrated MAE: `0.18130163223504703`
+- Binned-residual calibrated train MAE: `0.042692398710919066`
+- Binned-residual calibrated internal-val MAE: `0.1811977855022765`
+
+Conclusion: `bias_discrete_depths + numeric_path_film` is a useful generic
+bias-only combination under the default dropout setting. Its raw MAE is weaker
+than the `dropout=0.05` variants, but train-only calibration recovers much of
+the gap and nearly matches the dropout-only calibrated baseline. The three-way
+result remains the best evidence: dropout, discrete depth, and numeric-path
+FiLM appear to be complementary when all three are present.
+
 ## Notes
 
 - These are not final official Matbench test results.
