@@ -543,6 +543,79 @@ regression more than it helps zero-gap cases. The next numeric-loss ablation
 should test a larger Huber delta, keeping more errors in the smooth quadratic
 region.
 
+## Huber Delta 2.0 Ablation
+
+Run directory:
+
+`checkpoints/20260610_041643_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-huber-delta 2.0
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19895589746380493`
+- Best raw epoch: `46`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `0.0010011857817077946`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.10427563471061276`
+- Train raw MAE: `0.08620126506470294`
+- Train calibrated MAE: `0.07561406811105438`
+- Internal-val raw MAE: `0.19897113366743738`
+- Internal-val calibrated MAE: `0.19269166288450437`
+- Internal-val calibrated zero fraction: `0.4558840852868418`
+
+Conclusion: increasing the Huber transition point is also negative. The
+0.5/1.0/2.0 sweep suggests that the current compressed-space Huber shape is not
+the limiting factor for this fold; schedule and output-bias calibration remain
+more promising than further Huber-delta tuning.
+
+## Isotonic Calibration Ablation
+
+Run directory:
+
+`checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python scripts/calibrate_matbench_gap.py \
+  --checkpoint checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_best_val.pth \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --batch-size 256 --max-cpu-workers 4 --loss-compression-scale 5.0 \
+  --also-fit-isotonic --isotonic-input scale_bias \
+  --output checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/best_val_isotonic_scale_bias_calibration.json
+```
+
+Result:
+
+- Scalar calibrated internal-val MAE: `0.1852694723865815`
+- Isotonic calibrated internal-val MAE: `0.18821647991570978`
+- Scalar calibrated train MAE: `0.05116647935437652`
+- Isotonic calibrated train MAE: `0.05278508173376005`
+
+Conclusion: a more flexible train-only monotonic mapping does not improve this
+checkpoint, even before worrying about possible overfit. The simple global
+scale/bias/nonnegative/zero-threshold calibration is still the strongest
+no-leakage output-bias correction tested so far.
+
 ## Notes
 
 - These are not final official Matbench test results.
