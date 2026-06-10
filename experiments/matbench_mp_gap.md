@@ -910,6 +910,44 @@ supports the residual-calibration effect without using val to choose the
 hyperparameters. Fixed physical-looking edges lower train MAE more aggressively
 but generalize worse than quantile bins on internal validation.
 
+## Weight Decay 0.02 Ablation
+
+Commit:
+
+`54247bd feat: add weight decay override`
+
+Run directory:
+
+`checkpoints/20260610_143043_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --weight-decay 0.02
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.2019501742731977` at epoch 48
+- Train-only scalar calibrated internal-val MAE: `0.19444512656307547`
+- Train-only binned-residual calibrated internal-val MAE:
+  `0.19441525051407796`
+
+Conclusion: increasing AdamW weight decay from `0.01` to `0.02` is a clear
+negative result on the single official fold0 internal validation split. It
+lags the base 50-epoch run both before calibration (`0.20195` vs `0.19584`)
+and after the same train-only calibration (`0.19442` vs the current
+`0.18497` best candidate). This branch should not receive a warm restart; the
+next training-regularization test should instead vary dropout while keeping
+the base weight decay.
+
 ## Notes
 
 - These are not final official Matbench test results.
