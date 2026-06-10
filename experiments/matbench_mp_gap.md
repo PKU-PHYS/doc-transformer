@@ -948,6 +948,45 @@ and after the same train-only calibration (`0.19442` vs the current
 next training-regularization test should instead vary dropout while keeping
 the base weight decay.
 
+## Dropout 0.05 Ablation
+
+Commit:
+
+`3470afc feat: add dropout override`
+
+Run directory:
+
+`checkpoints/20260610_150732_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05
+```
+
+Result:
+
+- Best raw internal-val MAE: `0.19299828914686676` at epoch 46
+- Train-only scalar calibrated internal-val MAE: `0.18872184477529746`
+- Train-only binned-residual calibrated internal-val MAE:
+  `0.18872986891595864`
+
+Conclusion: reducing transformer dropout from `0.10` to `0.05` is a genuine
+structural training improvement on this single official fold0 internal
+validation split. It improves the 50-epoch raw best from `0.19584` to
+`0.19300`, and slightly improves the matched train-only scalar calibration
+from `0.18897` to `0.18872`. It does not beat the longer-schedule/warm-restart
+candidate (`0.18497`), and the binned-residual correction does not help this
+checkpoint. The next low-cost follow-up should warm-restart from the epoch 46
+best checkpoint with the same `dropout=0.05` setting.
+
 ## Notes
 
 - These are not final official Matbench test results.
