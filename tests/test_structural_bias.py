@@ -147,6 +147,36 @@ class StructuralBiasNestedGroupTests(unittest.TestCase):
         self.assertEqual(self.bias["shared_group_depth"][0, 4].item(), 0)
 
 
+class StructuralBiasSamePathTemplateTests(unittest.TestCase):
+    """验证忽略 array instance 后的同路径模板关系。"""
+
+    def setUp(self):
+        doc = {
+            "composition": [
+                {"element": "Na", "ratio": 0.5},
+                {"element": "Cl", "ratio": 0.5},
+            ],
+            "target": 0.0,
+        }
+        self.leaves = _parse(doc)
+        self.bias = compute_single_structural_bias(self.leaves)
+
+    def test_same_leaf_key_across_array_instances_matches(self):
+        # composition[0].element vs composition[1].element
+        self.assertEqual(self.bias["same_path_template"][0, 2].item(), 1)
+        # composition[0].ratio vs composition[1].ratio
+        self.assertEqual(self.bias["same_path_template"][1, 3].item(), 1)
+
+    def test_different_leaf_keys_do_not_match(self):
+        # composition[*].element and composition[*].ratio are different templates.
+        self.assertEqual(self.bias["same_path_template"][0, 1].item(), 0)
+        self.assertEqual(self.bias["same_path_template"][0, 3].item(), 0)
+
+    def test_target_does_not_match_composition_fields(self):
+        self.assertEqual(self.bias["same_path_template"][1, 4].item(), 0)
+        self.assertEqual(self.bias["same_path_template"][3, 4].item(), 0)
+
+
 class StructuralBiasDiagonalTests(unittest.TestCase):
     """对角线和基本性质测试。"""
 
