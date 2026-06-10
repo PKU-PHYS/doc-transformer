@@ -1207,6 +1207,53 @@ from other new signals and test `value_type_pair` alone, because it addresses a
 different generic relation: the directed attention role between numeric,
 string, boolean, and mask tokens.
 
+## Value-Type-Pair Structural Bias
+
+Run directory:
+
+`checkpoints/20260610_224239_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 50 --patience 50 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-value-type-pair
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19714943298914378`
+- Best raw epoch: `48`
+- Final epoch raw internal-val MAE: `0.19714943298914378`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `-0.001480775336927638`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.098`
+- Train raw MAE: `0.05530583274488042`
+- Train calibrated MAE: `0.0475221594922396`
+- Internal-val raw MAE: `0.19715597465907725`
+- Internal-val calibrated MAE: `0.1925050967768701`
+- Binned-residual calibrated train MAE: `0.0475399576442407`
+- Binned-residual calibrated internal-val MAE: `0.19257943952733467`
+
+Conclusion: `value_type_pair` is a clean, directed JSON-token relation, but by
+itself it is weaker than `same_path_template` and clearly worse than the
+matched 50-epoch dropout baseline. The current structural-bias additions do not
+explain the remaining gap to the 80-epoch best; the next promising generic
+direction is input-side numeric representation, especially making numeric
+encoding aware of the field/path context rather than adding more target-derived
+or output-only corrections.
+
 ## Notes
 
 - These are not final official Matbench test results.
