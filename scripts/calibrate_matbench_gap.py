@@ -339,6 +339,7 @@ def _apply_architecture_metadata(model_config, metadata):
         "bias_shared_group_depth",
         "bias_same_path_template",
         "bias_value_type_pair",
+        "numeric_path_beta",
         "numeric_path_film",
     ):
         if key in saved_model_config:
