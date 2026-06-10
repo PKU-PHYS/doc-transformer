@@ -637,6 +637,8 @@ def main():
                         help="Override TrainConfig.batch_size")
     parser.add_argument("--lr", type=float, default=None,
                         help="Override TrainConfig.lr")
+    parser.add_argument("--dropout", type=float, default=None,
+                        help="Override ModelConfig.dropout")
     parser.add_argument("--weight-decay", type=float, default=None,
                         help="Override TrainConfig.weight_decay")
     parser.add_argument("--structural-bias-lr-mult", type=float, default=None,
@@ -704,6 +706,8 @@ def main():
         train_config.batch_size = args.batch_size
     if args.lr is not None:
         train_config.lr = args.lr
+    if args.dropout is not None:
+        model_config.dropout = args.dropout
     if args.weight_decay is not None:
         train_config.weight_decay = args.weight_decay
     if args.structural_bias_lr_mult is not None:
