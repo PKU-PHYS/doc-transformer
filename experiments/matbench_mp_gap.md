@@ -1784,6 +1784,55 @@ the gap and nearly matches the dropout-only calibrated baseline. The three-way
 result remains the best evidence: dropout, discrete depth, and numeric-path
 FiLM appear to be complementary when all three are present.
 
+## Discrete Depth 80-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_065838_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --bias-discrete-depths
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19237995491523208`
+- Best raw epoch: `64`
+- Final epoch raw internal-val MAE: `0.19256771545088402`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.19371400053859256` /
+    `0.1932591599112969` / `0.1933578684317808` /
+    `0.1934131735184451` / `0.19256771545088402`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `-0.002348988940798158`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.064`
+- Train raw MAE: `0.05828074941524517`
+- Train calibrated MAE: `0.04699884233085141`
+- Internal-val raw MAE: `0.19237494918298126`
+- Internal-val calibrated MAE: `0.18795474080870514`
+- Binned-residual calibrated train MAE: `0.04679732113733563`
+- Binned-residual calibrated internal-val MAE: `0.18782283592840035`
+
+Conclusion: discrete depth encoding alone is not competitive with the
+dropout-only or FiLM-containing schedules at 80 epochs. The feature is still a
+clean structural-bias component, but its value appears to come from interaction
+with numeric-path FiLM and lower dropout rather than from replacing the
+continuous depth features by itself.
+
 ## Notes
 
 - These are not final official Matbench test results.
