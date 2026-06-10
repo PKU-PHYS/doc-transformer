@@ -27,6 +27,7 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
       - tree_dist:     两叶子到 LCA 的步数之和
       - same_parent:   是否为同一个 JSON object/list instance 下的 sibling leaf
       - shared_group_depth: 共享的数组 instance 祖先数量
+      - same_path_template: 忽略数组实例 ID 后是否为同一 JSON 路径模板
 
     Args:
         path_ids:        (B, T, D) 每个叶子的路径 ID 序列
@@ -40,6 +41,7 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
           "tree_dist":     两叶子到 LCA 的步数之和
           "same_parent":   同父 leaf（布尔→0/1）
           "shared_group_depth": 共同数组 instance 祖先数量
+          "same_path_template": 同路径模板 leaf（布尔→0/1）
     """
     B, T, D = path_ids.shape
 
@@ -114,12 +116,26 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
         group_first_diff,
     ).to(torch.int8)
 
+    # ── Bias 6: same_path_template ──
+    # 忽略数组实例 ID，只比较 dict-key 序列是否完全一致。不同数组元素中的
+    # 同名字段（如 composition[*].ratio）会得到 1；不同数组字段或不同 leaf key 为 0。
+    template_ids = torch.where(is_group.bool(), torch.zeros_like(path_ids), path_ids)
+    template_i = template_ids.unsqueeze(2).expand(B, T, T, D)
+    template_j = template_ids.unsqueeze(1).expand(B, T, T, D)
+    template_match = (template_i == template_j) | ~valid_mask
+    same_path_template = (
+        ~all_match
+        & (valid_path_lens.unsqueeze(2) == valid_path_lens.unsqueeze(1))
+        & template_match.all(dim=-1)
+    ).to(torch.int8)
+
     return {
         "is_group_fork": is_group_fork,
         "first_diff": first_diff,
         "tree_dist": tree_dist,
         "same_parent": same_parent,
         "shared_group_depth": shared_group_depth,
+        "same_path_template": same_path_template,
     }
 
 
@@ -144,6 +160,7 @@ def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Te
             "tree_dist": torch.zeros(0, 0, dtype=torch.int8),
             "same_parent": torch.zeros(0, 0, dtype=torch.int8),
             "shared_group_depth": torch.zeros(0, 0, dtype=torch.int8),
+            "same_path_template": torch.zeros(0, 0, dtype=torch.int8),
         }
 
     max_path_len = max(len(l.path_ids) for l in leaves)
@@ -154,6 +171,7 @@ def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Te
             "tree_dist": torch.zeros(T, T, dtype=torch.int8),
             "same_parent": torch.zeros(T, T, dtype=torch.int8),
             "shared_group_depth": torch.zeros(T, T, dtype=torch.int8),
+            "same_path_template": torch.zeros(T, T, dtype=torch.int8),
         }
 
     path_ids = torch.zeros(1, T, max_path_len, dtype=torch.long)
