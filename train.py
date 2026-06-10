@@ -637,6 +637,8 @@ def main():
                         help="Override TrainConfig.batch_size")
     parser.add_argument("--lr", type=float, default=None,
                         help="Override TrainConfig.lr")
+    parser.add_argument("--weight-decay", type=float, default=None,
+                        help="Override TrainConfig.weight_decay")
     parser.add_argument("--structural-bias-lr-mult", type=float, default=None,
                         help="Override TrainConfig.structural_bias_lr_mult")
     parser.add_argument("--bias-same-parent", action=argparse.BooleanOptionalAction,
@@ -702,6 +704,8 @@ def main():
         train_config.batch_size = args.batch_size
     if args.lr is not None:
         train_config.lr = args.lr
+    if args.weight_decay is not None:
+        train_config.weight_decay = args.weight_decay
     if args.structural_bias_lr_mult is not None:
         train_config.structural_bias_lr_mult = args.structural_bias_lr_mult
     if args.bias_same_parent is not None:
@@ -762,6 +766,7 @@ def main():
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
+              f"weight_decay={train_config.weight_decay}, "
               f"bias_lr_mult={train_config.structural_bias_lr_mult}")
         print(f"Structural bias: group_fork={model_config.bias_is_group_fork}, "
               f"first_diff={model_config.bias_first_diff}, "
@@ -815,6 +820,7 @@ def main():
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
               f"H={model_config.n_heads}, ff={model_config.d_ff}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
+              f"weight_decay={train_config.weight_decay}, "
               f"bias_lr_mult={train_config.structural_bias_lr_mult}")
         print(f"Structural bias: group_fork={model_config.bias_is_group_fork}, "
               f"first_diff={model_config.bias_first_diff}, "
@@ -920,6 +926,7 @@ def main():
     writer.add_text("config/model", f"d={model_config.d_model}, L={model_config.n_layers}, "
                      f"H={model_config.n_heads}, ff={model_config.d_ff}")
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
+                     f"weight_decay={train_config.weight_decay}, "
                      f"bias_lr_mult={train_config.structural_bias_lr_mult}, "
                      f"dataset={args.dataset}")
     writer.add_text(
