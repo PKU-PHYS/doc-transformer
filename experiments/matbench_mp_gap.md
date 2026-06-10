@@ -798,12 +798,25 @@ Stability check with `6 bins, shrinkage 5000`:
 | `avg_e10_e15.pth` | `0.18508102969846527` | `0.18496897995763836` | `0.05090135484499366` |
 | `avg_best_e10_e15.pth` | `0.18514711496903086` | `0.18503170834575763` | `0.05091816786536162` |
 
+Train-only CV selection check:
+
+- Grid: `bins in {4,6,8}`, `shrinkage in {5000,10000}`
+- Folds: `5`
+- Selected by train-only CV: `8 bins, shrinkage 5000`
+- Mean train-CV MAE: `0.05089767019235632`
+- Internal-val MAE after refitting selected mapping on all train:
+  `0.18498948106981508`
+
 Conclusion: a small, shrinkage-regularized residual correction improves the
 averaged checkpoint without using held-out test labels. The best single-fold
 candidate uses 6 quantile bins and shrinkage 5000; the nearby settings also
 improve over scalar calibration, but by a smaller amount. Applying the same
 residual calibration to neighboring averaged checkpoints also improves them,
-while preserving `avg_e10_e15.pth` as the best candidate.
+while preserving `avg_e10_e15.pth` as the best candidate. The train-only CV
+selection chooses the neighboring `8 bins, shrinkage 5000` setting and lands at
+`0.18498948106981508`, which is slightly weaker than the single-fold best but
+supports the residual-calibration effect without using val to choose the
+hyperparameters.
 
 ## Notes
 
