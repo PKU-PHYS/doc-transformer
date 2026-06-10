@@ -801,6 +801,44 @@ not improve on the earlier same-trajectory average plus residual calibration
 back toward the previous best, which confirms that the extra finetuning mostly
 moves away from the best calibrated region.
 
+## Higher-LR Warm Restart From E74 Checkpoint
+
+Run directory:
+
+`checkpoints/20260610_142023_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Warm-restart command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 12 --patience 12 --max-cpu-workers 4 \
+  --checkpoint-interval 4 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --resume checkpoints/20260609_211539_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/matbench_mp_gap_train_best_val.pth \
+  --warm-restart --lr 3e-6
+```
+
+This run was stopped after epoch 4 because the raw internal-val curve was
+clearly worse than the established `2e-6` warm restart:
+
+- Raw internal-val MAE by epoch: `0.19291248483379492`,
+  `0.19290110317856451`, `0.19267057437232488`, `0.19259954716252897`
+- Best raw internal-val MAE before stopping: `0.19259954716252897`
+- Best raw epoch before stopping: `4`
+- GPU peak during training: about `2.2G`
+
+Train-only residual calibration result:
+
+- Scalar calibrated internal-val MAE: `0.18573838961080438`
+- Binned-residual calibrated internal-val MAE: `0.18565765939532783`
+- Binned-residual calibrated train MAE: `0.05216159807361745`
+
+Conclusion: `3e-6` is too aggressive for this warm-restart point. It moves the
+model away from the useful low-LR basin and does not merit a full 12-epoch run.
+
 ## Binned Residual Calibration Ablation
 
 Commit:
