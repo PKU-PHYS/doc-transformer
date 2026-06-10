@@ -1467,6 +1467,60 @@ not show clean additive gains here; the best next use of budget is to extend the
 `same_parent` dropout-baseline run rather than prioritizing a longer
 `same_parent + numeric_path_film` run.
 
+## Same-Parent Bias 80-Epoch Dropout Schedule
+
+Run directory:
+
+`checkpoints/20260611_012809_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-same-parent
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.18810501787043746`
+- Best raw epoch: `79`
+- Final epoch raw internal-val MAE: `0.18810822931385138`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.19026114966998056` /
+    `0.19068618441266086` / `0.18852155044899715` /
+    `0.1883318535039353` / `0.18810822931385138`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9868103448275862`
+- `prediction_bias`: `0.0011149373750106014`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.054`
+- Train raw MAE: `0.034445618728721594`
+- Train calibrated MAE: `0.02639768811925706`
+- Internal-val raw MAE: `0.18811670790730553`
+- Internal-val calibrated MAE: `0.18508393961892597`
+- Binned-residual calibrated train MAE: `0.026357638035022897`
+- Binned-residual calibrated internal-val MAE: `0.18503255766405102`
+
+Conclusion: `same_parent` remains a positive structural-bias signal on the full
+80-epoch dropout schedule, but it does not beat the current `dropout=0.05`
+80-epoch best (`0.18445097342720354` raw / `0.18117659119360632` binned
+calibrated). The value of this result is directional: a categorical sibling
+relation still improves the strong baseline over shorter matched schedules and
+holds up through a long run, which makes discrete structural encodings worth a
+controlled probe. The next experiment should test whether integer tree-depth
+relations (`first_diff`, `tree_dist`, and optionally `shared_group_depth`) work
+better as learnable categorical bias embeddings than as continuous sinusoidal
+features.
+
 ## Notes
 
 - These are not final official Matbench test results.
