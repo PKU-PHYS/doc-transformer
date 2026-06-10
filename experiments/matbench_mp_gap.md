@@ -770,10 +770,20 @@ Result:
 | `6 bins, shrinkage 5000` | `0.18508102969846527` | `0.18496897995763836` | `0.05090135484499366` |
 | `8 bins, shrinkage 10000` | `0.1850851433462705` | `0.18500740347798172` | `0.050881150634927604` |
 
+Stability check with `6 bins, shrinkage 5000`:
+
+| Averaged checkpoint | Scalar val MAE | Residual val MAE | Residual train MAE |
+| --- | ---: | ---: | ---: |
+| `avg_best_e10.pth` | `0.1852221302268657` | `0.18512544229429684` | `0.051024934730922344` |
+| `avg_e10_e15.pth` | `0.18508102969846527` | `0.18496897995763836` | `0.05090135484499366` |
+| `avg_best_e10_e15.pth` | `0.18514711496903086` | `0.18503170834575763` | `0.05091816786536162` |
+
 Conclusion: a small, shrinkage-regularized residual correction improves the
 averaged checkpoint without using held-out test labels. The best single-fold
 candidate uses 6 quantile bins and shrinkage 5000; the nearby settings also
-improve over scalar calibration, but by a smaller amount.
+improve over scalar calibration, but by a smaller amount. Applying the same
+residual calibration to neighboring averaged checkpoints also improves them,
+while preserving `avg_e10_e15.pth` as the best candidate.
 
 ## Notes
 
