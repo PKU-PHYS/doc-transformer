@@ -755,6 +755,46 @@ same-trajectory checkpoint average (`0.18508102969846527`). It slightly improved
 raw MAE relative to the averaged checkpoint but moved the train-only calibration
 in the wrong direction, so this path is not the next best use of compute.
 
+## Very-Low-LR Warm Restart From Averaged Checkpoint
+
+Run directory:
+
+`checkpoints/20260610_135904_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed`
+
+Warm-restart command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 8 --patience 8 --max-cpu-workers 4 \
+  --checkpoint-interval 4 --log-every 250 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --resume checkpoints/20260609_213826_matbench_mp_gap_comp_cewald_cnn_dropcoords_resumed/avg_e10_e15.pth \
+  --warm-restart --lr 5e-7
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19164062293901407`
+- Best raw epoch: `5`
+- Final epoch raw internal-val MAE: `0.1917677242029105`
+- GPU peak during training: about `2.0G`
+
+Train-only residual calibration result:
+
+| Candidate | Scalar val MAE | Residual val MAE | Residual train MAE |
+| --- | ---: | ---: | ---: |
+| Best-val checkpoint | `0.18518028033741638` | `0.18513878437336823` | `0.05105686816086606` |
+| Average of previous best and new best | `0.18511917696447328` | `0.1850627706124678` | `0.05093547505329013` |
+
+Conclusion: reducing the second warm-restart LR from `1e-6` to `5e-7` still did
+not improve on the earlier same-trajectory average plus residual calibration
+(`0.18496897995763836`). The best result from this run comes from averaging
+back toward the previous best, which confirms that the extra finetuning mostly
+moves away from the best calibrated region.
+
 ## Binned Residual Calibration Ablation
 
 Commit:
