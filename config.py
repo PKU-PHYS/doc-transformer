@@ -24,6 +24,7 @@ class ModelConfig:
     bias_same_parent: bool = False
     bias_shared_group_depth: bool = False
     bias_same_path_template: bool = False
+    bias_value_type_pair: bool = False
     
     # 傅里叶特征 (数值编码用)
     n_fourier_feats: int = 64   # 频率数 k，映射后维度为 2k = 128

@@ -10,6 +10,13 @@ import torch
 from typing import List, Dict, Any, Tuple
 from model.json_parser import LeafNode
 
+_VALUE_TYPE_TO_ID = {
+    "number": 0,
+    "string": 1,
+    "boolean": 2,
+    "mask": 3,
+}
+
 
 # ═══════════════════════════════════════════════════════════════
 # §1  Structural Bias 计算
@@ -17,7 +24,8 @@ from model.json_parser import LeafNode
 
 def compute_structural_bias_indices(path_ids: torch.Tensor,
                                     is_group: torch.Tensor,
-                                    valid_path_lens: torch.Tensor) -> Dict[str, torch.Tensor]:
+                                    valid_path_lens: torch.Tensor,
+                                    value_type_ids: torch.Tensor | None = None) -> Dict[str, torch.Tensor]:
     """
     计算结构关系信号，衡量两个叶子在 JSON 树中的拓扑关系。
 
@@ -28,11 +36,14 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
       - same_parent:   是否为同一个 JSON object/list instance 下的 sibling leaf
       - shared_group_depth: 共享的数组 instance 祖先数量
       - same_path_template: 忽略数组实例 ID 后是否为同一 JSON 路径模板
+      - value_type_pair: query/key leaf 的值类型有向二元关系
 
     Args:
         path_ids:        (B, T, D) 每个叶子的路径 ID 序列
         is_group:        (B, T, D) 每个层级是否为 group (数组/列表)
         valid_path_lens: (B, T)    每个叶子路径的有效长度
+        value_type_ids:  (B, T)    每个叶子的值类型 ID:
+                                   number=0, string=1, boolean=2, mask=3
 
     Returns:
         Dict[str, Tensor]，每个 value 为 (B, T, T) int8:
@@ -42,6 +53,7 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
           "same_parent":   同父 leaf（布尔→0/1）
           "shared_group_depth": 共同数组 instance 祖先数量
           "same_path_template": 同路径模板 leaf（布尔→0/1）
+          "value_type_pair": query_type * 4 + key_type，表示有向 token 类型关系
     """
     B, T, D = path_ids.shape
 
@@ -129,6 +141,16 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
         & template_match.all(dim=-1)
     ).to(torch.int8)
 
+    # ── Bias 7: value_type_pair ──
+    # Attention mask 的行是 query、列是 key，因此该信号保留方向。
+    # 只编码 token 类型关系，不使用任何标签值或数据划分信息。
+    if value_type_ids is None:
+        value_type_pair = torch.zeros(B, T, T, dtype=torch.int8, device=path_ids.device)
+    else:
+        type_i = value_type_ids.unsqueeze(2)
+        type_j = value_type_ids.unsqueeze(1)
+        value_type_pair = (type_i * 4 + type_j).to(torch.int8)
+
     return {
         "is_group_fork": is_group_fork,
         "first_diff": first_diff,
@@ -136,6 +158,7 @@ def compute_structural_bias_indices(path_ids: torch.Tensor,
         "same_parent": same_parent,
         "shared_group_depth": shared_group_depth,
         "same_path_template": same_path_template,
+        "value_type_pair": value_type_pair,
     }
 
 
@@ -161,6 +184,7 @@ def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Te
             "same_parent": torch.zeros(0, 0, dtype=torch.int8),
             "shared_group_depth": torch.zeros(0, 0, dtype=torch.int8),
             "same_path_template": torch.zeros(0, 0, dtype=torch.int8),
+            "value_type_pair": torch.zeros(0, 0, dtype=torch.int8),
         }
 
     max_path_len = max(len(l.path_ids) for l in leaves)
@@ -172,20 +196,23 @@ def compute_single_structural_bias(leaves: List[LeafNode]) -> Dict[str, torch.Te
             "same_parent": torch.zeros(T, T, dtype=torch.int8),
             "shared_group_depth": torch.zeros(T, T, dtype=torch.int8),
             "same_path_template": torch.zeros(T, T, dtype=torch.int8),
+            "value_type_pair": torch.zeros(T, T, dtype=torch.int8),
         }
 
     path_ids = torch.zeros(1, T, max_path_len, dtype=torch.long)
     is_group = torch.zeros(1, T, max_path_len, dtype=torch.long)
     valid_lens = torch.zeros(1, T, dtype=torch.long)
+    value_type_ids = torch.zeros(1, T, dtype=torch.long)
 
     for i, leaf in enumerate(leaves):
         L = len(leaf.path_ids)
         valid_lens[0, i] = L
+        value_type_ids[0, i] = _VALUE_TYPE_TO_ID.get(leaf.value_type, 0)
         if L > 0:
             path_ids[0, i, :L] = torch.tensor(leaf.path_ids, dtype=torch.long)
             is_group[0, i, :L] = torch.tensor(leaf.path_types, dtype=torch.long)
 
-    result = compute_structural_bias_indices(path_ids, is_group, valid_lens)
+    result = compute_structural_bias_indices(path_ids, is_group, valid_lens, value_type_ids)
     return {k: v[0] for k, v in result.items()}
 
 

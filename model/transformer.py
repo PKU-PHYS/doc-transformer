@@ -121,6 +121,8 @@ class GlobalTransformer(nn.Module):
             self.bias_encoder.register_continuous("shared_group_depth")
         if config.bias_same_path_template:
             self.bias_encoder.register_category("same_path_template", num_classes=2)
+        if config.bias_value_type_pair:
+            self.bias_encoder.register_category("value_type_pair", num_classes=16)
         # Apply config-driven enable flags
         self.bias_encoder.set_enabled("is_group_fork", config.bias_is_group_fork)
         self.bias_encoder.set_enabled("first_diff", config.bias_first_diff)
@@ -131,6 +133,8 @@ class GlobalTransformer(nn.Module):
             self.bias_encoder.set_enabled("shared_group_depth", True)
         if config.bias_same_path_template:
             self.bias_encoder.set_enabled("same_path_template", True)
+        if config.bias_value_type_pair:
+            self.bias_encoder.set_enabled("value_type_pair", True)
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=config.d_model,

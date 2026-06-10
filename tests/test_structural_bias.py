@@ -177,6 +177,33 @@ class StructuralBiasSamePathTemplateTests(unittest.TestCase):
         self.assertEqual(self.bias["same_path_template"][3, 4].item(), 0)
 
 
+class StructuralBiasValueTypePairTests(unittest.TestCase):
+    """验证 query/key 值类型二元关系 bias。"""
+
+    def setUp(self):
+        doc = {
+            "n": 1.0,
+            "s": "Na",
+            "b": True,
+            "target": "[MASK]",
+        }
+        self.leaves = _parse(doc)
+        self.bias = compute_single_structural_bias(self.leaves)
+
+    def test_value_type_pair_codes_all_types(self):
+        # Type IDs: number=0, string=1, boolean=2, mask=3.
+        self.assertEqual(self.bias["value_type_pair"][0, 0].item(), 0)
+        self.assertEqual(self.bias["value_type_pair"][0, 1].item(), 1)
+        self.assertEqual(self.bias["value_type_pair"][0, 2].item(), 2)
+        self.assertEqual(self.bias["value_type_pair"][0, 3].item(), 3)
+
+    def test_value_type_pair_is_directional(self):
+        # mask query -> number key: 3 * 4 + 0
+        self.assertEqual(self.bias["value_type_pair"][3, 0].item(), 12)
+        # number query -> mask key: 0 * 4 + 3
+        self.assertEqual(self.bias["value_type_pair"][0, 3].item(), 3)
+
+
 class StructuralBiasDiagonalTests(unittest.TestCase):
     """对角线和基本性质测试。"""
 
@@ -207,8 +234,17 @@ class StructuralBiasDiagonalTests(unittest.TestCase):
             self.assertEqual(self.bias["first_diff"][i, i].item(), expected_len)
 
     def test_all_signals_symmetric(self):
-        """所有信号矩阵关于主对角线对称。"""
-        for name, tensor in self.bias.items():
+        """树结构信号矩阵关于主对角线对称。"""
+        symmetric_signals = {
+            "is_group_fork",
+            "first_diff",
+            "tree_dist",
+            "same_parent",
+            "shared_group_depth",
+            "same_path_template",
+        }
+        for name in symmetric_signals:
+            tensor = self.bias[name]
             self.assertTrue(torch.equal(tensor, tensor.t()),
                             f"{name} is not symmetric")
 

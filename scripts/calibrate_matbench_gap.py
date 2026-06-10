@@ -337,6 +337,8 @@ def _apply_architecture_metadata(model_config, metadata):
         "bias_tree_dist",
         "bias_same_parent",
         "bias_shared_group_depth",
+        "bias_same_path_template",
+        "bias_value_type_pair",
     ):
         if key in saved_model_config:
             setattr(model_config, key, saved_model_config[key])

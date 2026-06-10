@@ -652,6 +652,9 @@ def main():
     parser.add_argument("--bias-same-path-template", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Enable structural bias for leaves with the same dict-key path template")
+    parser.add_argument("--bias-value-type-pair", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Enable directional structural bias for query/key value-type pairs")
     parser.add_argument("--max-cpu-workers", type=int, default=None,
                         help="Override TrainConfig.max_cpu_workers")
     parser.add_argument("--loss-exponent-min", type=int, default=None,
@@ -721,6 +724,8 @@ def main():
         model_config.bias_shared_group_depth = args.bias_shared_group_depth
     if args.bias_same_path_template is not None:
         model_config.bias_same_path_template = args.bias_same_path_template
+    if args.bias_value_type_pair is not None:
+        model_config.bias_value_type_pair = args.bias_value_type_pair
     if args.max_cpu_workers is not None:
         train_config.max_cpu_workers = args.max_cpu_workers
     if args.loss_exponent_min is not None:
@@ -782,7 +787,8 @@ def main():
               f"tree_dist={model_config.bias_tree_dist}, "
               f"same_parent={model_config.bias_same_parent}, "
               f"shared_group_depth={model_config.bias_shared_group_depth}, "
-              f"same_path_template={model_config.bias_same_path_template}")
+              f"same_path_template={model_config.bias_same_path_template}, "
+              f"value_type_pair={model_config.bias_value_type_pair}")
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
@@ -837,7 +843,8 @@ def main():
               f"tree_dist={model_config.bias_tree_dist}, "
               f"same_parent={model_config.bias_same_parent}, "
               f"shared_group_depth={model_config.bias_shared_group_depth}, "
-              f"same_path_template={model_config.bias_same_path_template}")
+              f"same_path_template={model_config.bias_same_path_template}, "
+              f"value_type_pair={model_config.bias_value_type_pair}")
         print(f"Numeric loss: exponent=[{model_config.loss_exponent_min},"
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
@@ -947,7 +954,8 @@ def main():
         f"tree_dist={model_config.bias_tree_dist}, "
         f"same_parent={model_config.bias_same_parent}, "
         f"shared_group_depth={model_config.bias_shared_group_depth}, "
-        f"same_path_template={model_config.bias_same_path_template}",
+        f"same_path_template={model_config.bias_same_path_template}, "
+        f"value_type_pair={model_config.bias_value_type_pair}",
     )
     writer.add_text(
         "config/numeric_loss",
