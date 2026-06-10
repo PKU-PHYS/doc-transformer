@@ -16,39 +16,40 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
-`checkpoints/20260610_204411_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+`checkpoints/20260611_030957_matbench_mp_gap_comp_cewald_cnn_dropcoords`
 
 Checkpoint:
 
 `matbench_mp_gap_train_best_val.pth`
 
-This is a single checkpoint from an 80-epoch `dropout=0.05` cosine-schedule
-run. It applies train-only scalar calibration plus a conservative binned
-residual correction fitted only on the official train subset. No held-out test
-targets are loaded or used.
+This is a single checkpoint from an 80-epoch cosine-schedule run combining
+`dropout=0.05`, `numeric_path_film`, and categorical discrete depth bias for
+`first_diff`/`tree_dist`. It applies train-only scalar calibration plus a
+conservative binned residual correction fitted only on the official train
+subset. No held-out test targets are loaded or used.
 
 Result:
 
-- Raw internal-val MAE: `0.18445097342720354`
-- Raw best epoch: `74`
-- Final epoch raw internal-val MAE: `0.18463109290718835`
-- Scalar calibrated internal-val MAE: `0.18119688913386592`
-- Binned-residual calibrated internal-val MAE: `0.18117659119360632`
-- Binned-residual calibrated train MAE: `0.028336464163975245`
-- `prediction_scale`: `0.9868103448275862`
-- `prediction_bias`: `0.0002859855594980563`
+- Raw internal-val MAE: `0.18349455533800266`
+- Raw best epoch: `73`
+- Final epoch raw internal-val MAE: `0.18352685070425476`
+- Scalar calibrated internal-val MAE: `0.18056009869746822`
+- Binned-residual calibrated internal-val MAE: `0.1805583177254605`
+- Binned-residual calibrated train MAE: `0.027997064197959623`
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `0.0006901980361676423`
 - `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.056`
+- `prediction_zero_threshold`: `0.06`
 - Binned-residual bins: `6`
 - Binned-residual shrinkage: `5000.0`
-- Binned-residual zero threshold: `0.05`
+- Binned-residual zero threshold: `0.052000000000000005`
 - Checkpoint source: single best-val checkpoint, not a checkpoint average
 
-This improves the previous clean internal-validation best from `0.18496898` to
-`0.18117659`, a no-leakage single-fold gain of about `0.00379` MAE. The raw
-single-checkpoint MAE (`0.18445`) also beats the previous calibrated
-checkpoint-averaged result, so the gain is primarily from the structural
-training change rather than post-hoc averaging.
+This improves the previous clean internal-validation best from `0.18117659` to
+`0.18055832`, a no-leakage single-fold gain of about `0.00062` MAE. The raw
+single-checkpoint MAE (`0.18349`) also beats the previous raw best (`0.18445`),
+so the gain is from the structural/numeric training change rather than
+post-hoc calibration alone.
 
 ## Previous Checkpoint-Averaged Result
 
@@ -1578,6 +1579,59 @@ over the matched dropout baseline. It is slightly stronger than the
 `tree_dist == 2`, the next structural-bias work should avoid stacking the two
 directly and instead separate which generic depth signal benefits most from
 discretization.
+
+## Dropout Plus Discrete Depth Plus Numeric Path FiLM
+
+Run directory:
+
+`checkpoints/20260611_030957_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --numeric-path-film --bias-discrete-depths
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.18349455533800266`
+- Best raw epoch: `73`
+- Final epoch raw internal-val MAE: `0.18352685070425476`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.18621687214007937` /
+    `0.18659174881981977` / `0.18461913495467108` /
+    `0.18388267049839596` / `0.18352685070425476`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `0.0006901980361676423`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.06`
+- Train raw MAE: `0.03516331944635005`
+- Train calibrated MAE: `0.02808856545825752`
+- Internal-val raw MAE: `0.18349573230856453`
+- Internal-val calibrated MAE: `0.18056009869746822`
+- Binned-residual calibrated train MAE: `0.027997064197959623`
+- Binned-residual calibrated internal-val MAE: `0.1805583177254605`
+
+Conclusion: the three-way combination is the new clean fold0 internal-validation
+best so far. It improves the previous `dropout=0.05` 80-epoch best from
+`0.18445097342720354` raw / `0.18117659119360632` binned calibrated to
+`0.18349455533800266` raw / `0.1805583177254605` binned calibrated. This
+supports the user's hypothesis that short-run rankings should not eliminate
+structural/numeric-bias factors; the combination was not best at 20 epochs but
+became best by the full 80-epoch schedule. The remaining nonempty subsets of
+`dropout=0.05`, `numeric_path_film`, and `bias_discrete_depths` should still be
+run to completion before drawing a final interaction conclusion.
 
 ## Notes
 
