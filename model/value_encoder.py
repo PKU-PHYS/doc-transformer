@@ -51,8 +51,10 @@ class ValueEncoder(nn.Module):
       V_num = Fourier(M) + Embedding(E)
     """
     def __init__(self, d_model: int, frozen_lm_dim: int, n_fourier_feats: int, fourier_learnable: bool,
-                 exponent_min: int = -50, exponent_max: int = 49):
+                 exponent_min: int = -50, exponent_max: int = 49,
+                 numeric_path_film: bool = False):
         super().__init__()
+        self.numeric_path_film = numeric_path_film
         
         # ── 数值型编码：Base-2 科学计数法解构 ──
         # 尾数编码器（傅里叶特征，M ∈ [-1, 1] 天然归一化）
@@ -66,6 +68,12 @@ class ValueEncoder(nn.Module):
         self.exponent_embed = nn.Embedding(n_exponent_bins, d_model)
         self.n_exponent_bins = n_exponent_bins
         self.exponent_offset = -exponent_min  # E=0 映射到 index -exponent_min
+        if numeric_path_film:
+            self.numeric_path_film_proj = nn.Linear(d_model, 2 * d_model)
+            nn.init.zeros_(self.numeric_path_film_proj.weight)
+            nn.init.zeros_(self.numeric_path_film_proj.bias)
+        else:
+            self.numeric_path_film_proj = None
         
         # 文本型编码：先用 FrozenLM 得到特征，这里再做线性投影
         self.text_proj = nn.Linear(frozen_lm_dim, d_model)
@@ -76,13 +84,15 @@ class ValueEncoder(nn.Module):
         # 掩码向量
         self.mask_token = nn.Parameter(torch.randn(d_model))
         
-    def forward(self, node_types: list[str], raw_values: list, lm_embeddings: Tensor = None) -> Tensor:
+    def forward(self, node_types: list[str], raw_values: list, lm_embeddings: Tensor = None,
+                path_context: Tensor = None) -> Tensor:
         """
         对一批混合类型的值进行编码。
         node_types: 长度为 N 的列表，如 ["number", "string", "mask", ...]
         raw_values: 长度为 N 的原始值列表，如 [2.1, "TiO2", "[MASK]", ...]
         lm_embeddings: 如果该 batch 中有 string，需在外部先用 FrozenLM 算出 (N_str, lm_dim) 传入。
                        如果没有 string，可传 None。
+        path_context: 可选 (N, d_model) 路径上下文；启用 numeric_path_film 时只调制 number token。
         返回: (N, d_model) 的特征表示
         """
         N = len(node_types)
@@ -125,7 +135,14 @@ class ValueEncoder(nn.Module):
             
             m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数
             e_emb = self.exponent_embed(e_indices)     # (N_num, d_model) — 查表获取量级
-            out[num_indices] = m_emb + e_emb  # 直接相加，与 pos+token embedding 范式一致
+            num_emb = m_emb + e_emb  # 直接相加，与 pos+token embedding 范式一致
+            if self.numeric_path_film:
+                if path_context is None:
+                    raise ValueError("numeric_path_film=True requires path_context.")
+                gamma_beta = self.numeric_path_film_proj(path_context[num_indices])
+                gamma, beta = gamma_beta.chunk(2, dim=-1)
+                num_emb = num_emb * (1.0 + torch.tanh(gamma)) + beta
+            out[num_indices] = num_emb
             
         if str_indices:
             if lm_embeddings is None:

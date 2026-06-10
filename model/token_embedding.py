@@ -27,6 +27,7 @@ class TokenEmbedding(nn.Module):
             fourier_learnable=config.fourier_learnable,
             exponent_min=config.exponent_min,
             exponent_max=config.exponent_max,
+            numeric_path_film=config.numeric_path_film,
         )
         
         self.path_encoder = GRUPathEncoder(
@@ -66,17 +67,7 @@ class TokenEmbedding(nn.Module):
             unique_embs = None
             text_to_idx = {}
 
-        # ── 第二步：值编码 ──
-        if str_values:
-            lm_value_embs = unique_embs[[text_to_idx[s] for s in str_values]]
-        else:
-            lm_value_embs = None
-
-        node_types = [l.value_type for l in leaves]
-        raw_values = [l.value for l in leaves]
-        val_embs = self.value_encoder(node_types, raw_values, lm_embeddings=lm_value_embs)
-        
-        # ── 第三步：路径编码 — 全量批构建，零逐元素 CUDA 操作 ──
+        # ── 第二步：路径编码 — 全量批构建，零逐元素 CUDA 操作 ──
         lm_dim = frozen_lm.dim()
         max_path_len = max(len(l.path) for l in leaves) if leaves else 0
         
@@ -116,6 +107,21 @@ class TokenEmbedding(nn.Module):
         path_depths = torch.zeros(N, max_path_len, dtype=torch.long, device=device)
         
         path_embs = self.path_encoder(path_text_embs, path_depths, path_types, valid_lens)
+
+        # ── 第三步：值编码 ──
+        if str_values:
+            lm_value_embs = unique_embs[[text_to_idx[s] for s in str_values]]
+        else:
+            lm_value_embs = None
+
+        node_types = [l.value_type for l in leaves]
+        raw_values = [l.value for l in leaves]
+        val_embs = self.value_encoder(
+            node_types,
+            raw_values,
+            lm_embeddings=lm_value_embs,
+            path_context=path_embs if self.value_encoder.numeric_path_film else None,
+        )
         
         # ── 最终求和（值 + 路径，组信息由 fork bias 在注意力层提供）──
         return val_embs + path_embs

@@ -668,6 +668,9 @@ def main():
     parser.add_argument("--numeric-loss", type=str, default=None,
                         choices=["huber", "l1"],
                         help="Override ModelConfig.numeric_loss")
+    parser.add_argument("--numeric-path-film", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Modulate numeric value embeddings with their JSON path embeddings")
     parser.add_argument("--numeric-huber-delta", type=float, default=None,
                         help="Override ModelConfig.numeric_huber_delta")
     parser.add_argument("--numeric-output", type=str, default=None,
@@ -738,6 +741,8 @@ def main():
         model_config.loss_compression_scale = args.loss_compression_scale
     if args.numeric_loss is not None:
         model_config.numeric_loss = args.numeric_loss
+    if args.numeric_path_film is not None:
+        model_config.numeric_path_film = args.numeric_path_film
     if args.numeric_huber_delta is not None:
         model_config.numeric_huber_delta = args.numeric_huber_delta
     if args.numeric_output is not None:
@@ -793,6 +798,7 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"loss={model_config.numeric_loss}, "
+              f"path_film={model_config.numeric_path_film}, "
               f"huber_delta={model_config.numeric_huber_delta}, "
               f"output={model_config.numeric_output}, "
               f"pred_scale={model_config.prediction_scale}, "
@@ -849,6 +855,7 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"loss={model_config.numeric_loss}, "
+              f"path_film={model_config.numeric_path_film}, "
               f"huber_delta={model_config.numeric_huber_delta}, "
               f"output={model_config.numeric_output}, "
               f"pred_scale={model_config.prediction_scale}, "
@@ -964,6 +971,7 @@ def main():
         f"loss_scale_power={model_config.loss_scale_power}, "
         f"loss_compression_scale={model_config.loss_compression_scale}, "
         f"numeric_loss={model_config.numeric_loss}, "
+        f"numeric_path_film={model_config.numeric_path_film}, "
         f"numeric_huber_delta={model_config.numeric_huber_delta}, "
         f"numeric_output={model_config.numeric_output}, "
         f"numeric_softplus_beta={model_config.numeric_softplus_beta}, "
