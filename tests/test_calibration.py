@@ -4,10 +4,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import torch
+
 from calibration import apply_calibration_report
 from eval import apply_numeric_postprocessing
 from scripts.calibrate_matbench_gap import (
     _apply_binned_residual,
+    _collect_checkpoint_predictions,
     _fit_cv_binned_residual,
     _parse_float_list,
     _parse_int_list,
@@ -98,6 +101,58 @@ class CalibrationReportTests(unittest.TestCase):
     def test_grid_parsers(self):
         self.assertEqual(_parse_int_list("4,6,8"), [4, 6, 8])
         self.assertEqual(_parse_float_list("1,2.5"), [1.0, 2.5])
+
+    def test_collect_checkpoint_predictions_averages_ensemble(self):
+        class Head:
+            def __init__(self, model):
+                self.model = model
+
+            def predict_number(self, mask_repr):
+                return torch.full((mask_repr.shape[0],), self.model.value)
+
+        class Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.value = 0.0
+                self.decode_head = Head(self)
+
+            def load_state_dict(self, state):
+                self.value = float(state["value"])
+
+            def eval(self):
+                return self
+
+            def forward(self, batched_leaves, padding_mask, bias_indices=None):
+                return torch.zeros(len(batched_leaves), 1, 2)
+
+        loader = [
+            (
+                [[object()]],
+                [{0: (2.0, "number")}],
+                torch.zeros(1, 1, dtype=torch.bool),
+                {},
+            )
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path1 = Path(tmp) / "a.pth"
+            path2 = Path(tmp) / "b.pth"
+            torch.save({"model": {"value": 1.0}}, path1)
+            torch.save({"model": {"value": 3.0}}, path2)
+
+            train_preds, train_targets, val_preds, val_targets = (
+                _collect_checkpoint_predictions(
+                    Model(),
+                    [path1, path2],
+                    loader,
+                    loader,
+                    "cpu",
+                )
+            )
+
+        self.assertEqual(train_preds.tolist(), [2.0])
+        self.assertEqual(val_preds.tolist(), [2.0])
+        self.assertEqual(train_targets.tolist(), [2.0])
+        self.assertEqual(val_targets.tolist(), [2.0])
 
 
 if __name__ == "__main__":

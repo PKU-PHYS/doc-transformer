@@ -63,6 +63,41 @@ def _collect_predictions(model, loader, device):
     return np.asarray(preds, dtype=np.float64), np.asarray(targets, dtype=np.float64)
 
 
+def _collect_checkpoint_predictions(
+    model,
+    checkpoint_paths,
+    train_loader,
+    val_loader,
+    device,
+):
+    train_predictions = []
+    val_predictions = []
+    train_targets_ref = None
+    val_targets_ref = None
+
+    for checkpoint_path in checkpoint_paths:
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint["model"])
+        train_preds, train_targets = _collect_predictions(model, train_loader, device)
+        val_preds, val_targets = _collect_predictions(model, val_loader, device)
+
+        if train_targets_ref is None:
+            train_targets_ref = train_targets
+            val_targets_ref = val_targets
+        elif not (
+            np.array_equal(train_targets_ref, train_targets)
+            and np.array_equal(val_targets_ref, val_targets)
+        ):
+            raise RuntimeError("Target order changed while collecting ensemble predictions")
+
+        train_predictions.append(train_preds)
+        val_predictions.append(val_preds)
+
+    train_mean = np.mean(np.stack(train_predictions, axis=0), axis=0)
+    val_mean = np.mean(np.stack(val_predictions, axis=0), axis=0)
+    return train_mean, train_targets_ref, val_mean, val_targets_ref
+
+
 def _postprocess_array(
     preds,
     *,
@@ -336,6 +371,12 @@ def main():
         allow_abbrev=False,
     )
     parser.add_argument("--checkpoint", required=True, help="Path to checkpoint .pth")
+    parser.add_argument(
+        "--ensemble-checkpoint",
+        action="append",
+        default=[],
+        help="Additional checkpoint to average at prediction level before calibration",
+    )
     parser.add_argument("--output", default=None, help="Calibration JSON output path")
     parser.add_argument("--dataset", default="matbench_mp_gap")
     parser.add_argument("--model-size", default="large")
@@ -448,11 +489,14 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     frozen_lm = FrozenLM(model_config.frozen_lm_name, device=device)
     model = DocumentTransformer(model_config, frozen_lm).to(device)
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint["model"])
-
-    train_preds, train_targets = _collect_predictions(model, train_loader, device)
-    val_preds, val_targets = _collect_predictions(model, val_loader, device)
+    checkpoint_paths = [args.checkpoint, *args.ensemble_checkpoint]
+    train_preds, train_targets, val_preds, val_targets = _collect_checkpoint_predictions(
+        model,
+        checkpoint_paths,
+        train_loader,
+        val_loader,
+        device,
+    )
 
     scale, bias, train_scale_bias_mae = _fit_scale_and_bias(
         train_preds,
@@ -476,6 +520,7 @@ def main():
     report = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "checkpoint": args.checkpoint,
+        "ensemble_checkpoints": args.ensemble_checkpoint,
         "dataset": args.dataset,
         "split": {
             "strategy": "official",
