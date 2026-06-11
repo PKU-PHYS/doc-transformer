@@ -25,40 +25,40 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
-`checkpoints/20260611_132724_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+`checkpoints/20260611_182039_matbench_mp_gap_comp_cewald_cnn_dropcoords`
 
 Checkpoint:
 
 `matbench_mp_gap_train_best_val.pth`
 
 This is a single checkpoint from a 200-epoch cosine-schedule run with the best
-80-epoch raw recipe promoted to a full-length run:
-`dropout=0.05 + numeric_path_film + bias_discrete_depths`. It applies
-train-only scalar calibration plus a conservative binned residual correction
-fitted only on the official train subset. No held-out test targets are loaded
-or used.
+raw recipe plus a nonnegative numeric output constraint:
+`dropout=0.05 + numeric_path_film + bias_discrete_depths + numeric_output=softplus`.
+It applies train-only scalar calibration fitted only on the official train
+subset. No held-out test targets are loaded or used.
 
 Result:
 
-- Raw internal-val MAE: `0.17965497241258405`
-- Raw best epoch: `145`
-- Final epoch raw internal-val MAE: `0.18010168557175305`
-- Scalar calibrated internal-val MAE: `0.17819127034692456`
-- Binned-residual calibrated internal-val MAE: `0.1781657682783476`
-- Binned-residual calibrated train MAE: `0.01866964458064931`
-- `prediction_scale`: `0.988793103448276`
-- `prediction_bias`: `-0.0006633100260434481`
+- Raw internal-val MAE: `0.17881303710711297`
+- Raw best epoch: `139`
+- Final epoch raw internal-val MAE: `0.17994268767670255`
+- Scalar calibrated internal-val MAE: `0.17812287656909076`
+- Binned-residual calibrated internal-val MAE: `0.17821151011532976`
+- Binned-residual calibrated train MAE: `0.019706615475701593`
+- `prediction_scale`: `0.9927586206896553`
+- `prediction_bias`: `-0.0011391912171103318`
 - `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.024`
+- `prediction_zero_threshold`: `0.018000000000000002`
 - Binned-residual bins: `6`
 - Binned-residual shrinkage: `5000.0`
-- Binned-residual zero threshold: `0.02`
+- Binned-residual zero threshold: `0.012191449678981711`
 - Checkpoint source: single best-val checkpoint, not a checkpoint average
 
-This improves the previous 80-epoch raw best from `0.18349456` to
-`0.17965497`. The calibration gain is small
-(`0.17964935` raw from the calibration script to `0.17816577` binned), so this
-is mainly a stronger trained model rather than a result dominated by
+This improves the previous raw best from `0.17965497` to `0.17881304` while
+forcing the raw prediction negative fraction to `0.0`. The scalar calibration
+gain is small (`0.17881435` raw from the calibration script to `0.17812288`
+calibrated), and conservative binned residual correction does not help this
+run, so this is mainly a healthier raw model rather than a result dominated by
 post-training calibration.
 
 ## Current Best 80-Epoch Clean Internal-Val Screen
@@ -2229,12 +2229,72 @@ much of the gain comes from train-fitted min/threshold correction. The next
 useful line is to make FiLM's raw output distribution healthier, not to stack
 more post-processing.
 
+## Dropout 0.05 Plus Discrete Depths Plus FiLM Softplus 200-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_182039_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
+  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-discrete-depths --numeric-path-film \
+  --numeric-output softplus
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.17881303710711297`
+- Best raw epoch: `139`
+- Final epoch raw internal-val MAE: `0.17994268767670255`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Periodic raw internal-val MAE:
+  - E20/E40/E60/E80/E100: `0.2372179451241298` /
+    `0.2068643024899877` / `0.1954102280347106` /
+    `0.19272499982412722` / `0.18624657226484503`
+  - E120/E139/E140/E160/E180/E200: `0.18320705505153795` /
+    `0.17881303710711297` / `0.18009617597085628` /
+    `0.1806064859619391` / `0.17974487234490497` /
+    `0.17994268767670255`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9927586206896553`
+- `prediction_bias`: `-0.0011391912171103318`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.018000000000000002`
+- Train raw MAE: `0.023106647078562314`
+- Train calibrated MAE: `0.02007857954643171`
+- Internal-val raw MAE: `0.1788143511368099`
+- Internal-val calibrated MAE: `0.17812287656909076`
+- Binned-residual calibrated train MAE: `0.019706615475701593`
+- Binned-residual calibrated internal-val MAE: `0.17821151011532976`
+- Raw negative fraction on internal val: `0.0`
+- Calibrated zero fraction on internal val: `0.41712804806219816`
+- Target zero fraction on internal val: `0.4439863352573919`
+
+Conclusion: adding a softplus numeric output to the three-way recipe gives the
+best raw single-fold result so far and directly fixes the high-negative-output
+failure mode seen in FiLM-only models. The improvement is not a dirty zero
+classifier or target prior: it is a generic decode-head constraint suitable for
+nonnegative numeric targets such as band gap. Train-only scalar calibration
+still gives a small improvement, but binned residual correction no longer helps,
+which is consistent with a healthier raw prediction distribution.
+
 ## Notes
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
-- The strongest raw result so far is the 200-epoch three-way `dropout=0.05 +
-  numeric_path_film + bias_discrete_depths` run at `0.17965497`.
+- The strongest raw result so far is the 200-epoch `dropout=0.05 +
+  numeric_path_film + bias_discrete_depths + numeric_output=softplus` run at
+  `0.17881304`.
 - The strongest train-only-calibrated result so far is the 200-epoch
   `numeric_path_film` run at `0.17644324`, but it has a high raw negative
   prediction fraction and is therefore a diagnostic target rather than the
