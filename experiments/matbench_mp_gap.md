@@ -21,20 +21,56 @@ The held-out Matbench test fold is kept blind during optimization.
 - Candidate recipes selected from the 80-epoch screen should be promoted to a
   200-epoch run before treating them as serious final candidates.
 
-## Current Best 80-Epoch Clean Internal-Val Result
+## Current Best Clean Internal-Val Result
 
 Run directory:
 
-`checkpoints/20260611_075420_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+`checkpoints/20260611_132724_matbench_mp_gap_comp_cewald_cnn_dropcoords`
 
 Checkpoint:
 
 `matbench_mp_gap_train_best_val.pth`
 
-This is a single checkpoint from an 80-epoch cosine-schedule run enabling
-`numeric_path_film` under the default dropout setting. It applies train-only
-scalar calibration plus a conservative binned residual correction fitted only
-on the official train subset. No held-out test targets are loaded or used.
+This is a single checkpoint from a 200-epoch cosine-schedule run with the best
+80-epoch raw recipe promoted to a full-length run:
+`dropout=0.05 + numeric_path_film + bias_discrete_depths`. It applies
+train-only scalar calibration plus a conservative binned residual correction
+fitted only on the official train subset. No held-out test targets are loaded
+or used.
+
+Result:
+
+- Raw internal-val MAE: `0.17965497241258405`
+- Raw best epoch: `145`
+- Final epoch raw internal-val MAE: `0.18010168557175305`
+- Scalar calibrated internal-val MAE: `0.17819127034692456`
+- Binned-residual calibrated internal-val MAE: `0.1781657682783476`
+- Binned-residual calibrated train MAE: `0.01866964458064931`
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `-0.0006633100260434481`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.024`
+- Binned-residual bins: `6`
+- Binned-residual shrinkage: `5000.0`
+- Binned-residual zero threshold: `0.02`
+- Checkpoint source: single best-val checkpoint, not a checkpoint average
+
+This improves the previous 80-epoch raw best from `0.18349456` to
+`0.17965497` and slightly improves the previous clean train-only-calibrated
+best from `0.17866468` to `0.17816577`. The calibration gain is small
+(`0.17964935` raw from the calibration script to `0.17816577` binned), so this
+is mainly a stronger trained model rather than a result dominated by
+post-training calibration.
+
+## Current Best 80-Epoch Clean Internal-Val Screen
+
+Run directory:
+
+`checkpoints/20260611_075420_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+This 80-epoch screen remains useful as evidence that `numeric_path_film` alone
+has very favorable train-only calibration behavior, but it is no longer the
+overall best result after promoting the three-way raw recipe to 200 epochs.
 
 Result:
 
@@ -43,22 +79,6 @@ Result:
 - Final epoch raw internal-val MAE: `0.1854295078517309`
 - Scalar calibrated internal-val MAE: `0.1786675109253744`
 - Binned-residual calibrated internal-val MAE: `0.17866467743857514`
-- Binned-residual calibrated train MAE: `0.04138452037057726`
-- `prediction_scale`: `0.9749137931034483`
-- `prediction_bias`: `0.0040830272564600254`
-- `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.068`
-- Binned-residual bins: `6`
-- Binned-residual shrinkage: `5000.0`
-- Binned-residual zero threshold: `0.06078463622176789`
-- Checkpoint source: single best-val checkpoint, not a checkpoint average
-
-This improves the previous clean train-only-calibrated internal-validation best
-from `0.18055832` to `0.17866468`, a no-leakage single-fold gain of about
-`0.00189` MAE. The raw single-checkpoint best remains the three-way
-`dropout=0.05 + numeric_path_film + bias_discrete_depths` run at `0.18349456`;
-the `numeric_path_film`-only run is currently the best calibrated model, not
-the best raw model.
 
 ## Previous Checkpoint-Averaged Result
 
@@ -2092,11 +2112,70 @@ and also worsens train-only-calibrated MAE. The current evidence does not
 support stronger dropout as a path forward for FiLM; any future dropout search
 should stay near the default rather than moving higher.
 
+## Dropout 0.05 Plus Discrete Depths Plus FiLM 200-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_132724_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
+  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-discrete-depths --numeric-path-film
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.17965497241258405`
+- Best raw epoch: `145`
+- Final epoch raw internal-val MAE: `0.18010168557175305`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Periodic raw internal-val MAE:
+  - E20/E40/E60/E80/E100: `0.24105997043818372` /
+    `0.21976179681332403` / `0.19516288809235324` /
+    `0.1908363205849238` / `0.18410711832332788`
+  - E120/E140/E145/E160/E180/E200: `0.1811038670895302` /
+    `0.18240708139389805` / `0.17965497241258405` /
+    `0.18169540838297232` / `0.17984068737289996` /
+    `0.18010168557175305`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `-0.0006633100260434481`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.024`
+- Train raw MAE: `0.024967051540424317`
+- Train calibrated MAE: `0.01874356837319561`
+- Internal-val raw MAE: `0.17964934634434743`
+- Internal-val calibrated MAE: `0.17819127034692456`
+- Binned-residual calibrated train MAE: `0.01866964458064931`
+- Binned-residual calibrated internal-val MAE: `0.1781657682783476`
+- Raw negative fraction on internal val: `0.14618918600541878`
+- Calibrated zero fraction on internal val: `0.4152432559783249`
+- Target zero fraction on internal val: `0.4439863352573919`
+
+Conclusion: promoting the best 80-epoch raw recipe to the user's historical
+200-epoch budget produces the first clean single-fold raw result below `0.18`.
+The improvement is structural/training-side: train-only scalar plus binned
+calibration only moves internal-val MAE from `0.17964935` to `0.17816577`.
+This makes the three-way recipe the current main candidate for further
+no-leakage optimization. The run also clarifies that the 80-epoch screen was
+useful for choosing candidates but systematically undertrained this recipe
+relative to a 200-epoch schedule.
+
 ## Notes
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
-- The strongest raw result so far is the three-way `dropout=0.05 +
-  numeric_path_film + bias_discrete_depths` run.
-- The strongest train-only-calibrated result so far is `numeric_path_film` with
-  default dropout.
+- The strongest raw result so far is the 200-epoch three-way `dropout=0.05 +
+  numeric_path_film + bias_discrete_depths` run at `0.17965497`.
+- The strongest train-only-calibrated result so far is the same 200-epoch
+  three-way run at `0.17816577` with conservative binned residual correction.
