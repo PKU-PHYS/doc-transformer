@@ -35,7 +35,6 @@ class ModelConfig:
     fourier_learnable: bool = True # 频率参数是否参与梯度更新
     # 用 JSON path embedding 对数值 token 做字段条件化调制。
     # 零初始化，开启时训练初始行为等价于旧数值编码。
-    numeric_path_beta: bool = False
     numeric_path_gamma: bool = False
     numeric_path_film: bool = False
     
@@ -59,11 +58,6 @@ class ModelConfig:
     numeric_loss: str = "huber"
     # Huber loss 的 L1/L2 转折点；仅 numeric_loss="huber" 时生效
     numeric_huber_delta: float = 1.0
-    # 数值输出约束：
-    #   "linear": 无约束，适用于一般回归
-    #   "softplus": 非负输出，适用于 band gap 等物理非负目标
-    numeric_output: str = "linear"
-    numeric_softplus_beta: float = 1.0
     # 数值预测校准: 先做 scale * raw + bias, 再做下界裁剪和近零阈值置零
     prediction_scale: float = 1.0
     prediction_bias: float = 0.0

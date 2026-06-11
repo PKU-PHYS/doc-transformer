@@ -27,7 +27,6 @@ class TokenEmbedding(nn.Module):
             fourier_learnable=config.fourier_learnable,
             exponent_min=config.exponent_min,
             exponent_max=config.exponent_max,
-            numeric_path_beta=config.numeric_path_beta,
             numeric_path_gamma=config.numeric_path_gamma,
             numeric_path_film=config.numeric_path_film,
         )
@@ -124,8 +123,7 @@ class TokenEmbedding(nn.Module):
             lm_embeddings=lm_value_embs,
             path_context=path_embs
             if (
-                self.value_encoder.numeric_path_beta
-                or self.value_encoder.numeric_path_gamma
+                self.value_encoder.numeric_path_gamma
                 or self.value_encoder.numeric_path_film
             )
             else None,

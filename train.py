@@ -675,9 +675,6 @@ def main():
     parser.add_argument("--numeric-loss", type=str, default=None,
                         choices=["huber", "l1"],
                         help="Override ModelConfig.numeric_loss")
-    parser.add_argument("--numeric-path-beta", action=argparse.BooleanOptionalAction,
-                        default=None,
-                        help="Add a path-conditioned zero-initialized beta offset to numeric value embeddings")
     parser.add_argument("--numeric-path-gamma", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Modulate numeric value embeddings with a path-conditioned multiplicative gamma")
@@ -686,11 +683,6 @@ def main():
                         help="Modulate numeric value embeddings with their JSON path embeddings")
     parser.add_argument("--numeric-huber-delta", type=float, default=None,
                         help="Override ModelConfig.numeric_huber_delta")
-    parser.add_argument("--numeric-output", type=str, default=None,
-                        choices=["linear", "softplus"],
-                        help="Override ModelConfig.numeric_output")
-    parser.add_argument("--numeric-softplus-beta", type=float, default=None,
-                        help="Override ModelConfig.numeric_softplus_beta")
     parser.add_argument("--prediction-scale", type=float, default=None,
                         help="Multiply numeric predictions by this scalar during evaluation/inference")
     parser.add_argument("--prediction-bias", type=float, default=None,
@@ -760,8 +752,6 @@ def main():
         model_config.loss_compression_scale = args.loss_compression_scale
     if args.numeric_loss is not None:
         model_config.numeric_loss = args.numeric_loss
-    if args.numeric_path_beta is not None:
-        model_config.numeric_path_beta = args.numeric_path_beta
     if args.numeric_path_gamma is not None:
         model_config.numeric_path_gamma = args.numeric_path_gamma
     if args.numeric_path_film is not None:
@@ -769,18 +759,13 @@ def main():
     if sum(
         bool(x)
         for x in (
-            model_config.numeric_path_beta,
             model_config.numeric_path_gamma,
             model_config.numeric_path_film,
         )
     ) > 1:
-        parser.error("--numeric-path-beta, --numeric-path-gamma, and --numeric-path-film are mutually exclusive")
+        parser.error("--numeric-path-gamma and --numeric-path-film are mutually exclusive")
     if args.numeric_huber_delta is not None:
         model_config.numeric_huber_delta = args.numeric_huber_delta
-    if args.numeric_output is not None:
-        model_config.numeric_output = args.numeric_output
-    if args.numeric_softplus_beta is not None:
-        model_config.numeric_softplus_beta = args.numeric_softplus_beta
     if args.prediction_scale is not None:
         model_config.prediction_scale = args.prediction_scale
     if args.prediction_bias is not None:
@@ -832,11 +817,9 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"loss={model_config.numeric_loss}, "
-              f"path_beta={model_config.numeric_path_beta}, "
               f"path_gamma={model_config.numeric_path_gamma}, "
               f"path_film={model_config.numeric_path_film}, "
               f"huber_delta={model_config.numeric_huber_delta}, "
-              f"output={model_config.numeric_output}, "
               f"pred_scale={model_config.prediction_scale}, "
               f"pred_bias={model_config.prediction_bias}, "
               f"pred_min={model_config.prediction_min_value}, "
@@ -893,11 +876,9 @@ def main():
               f"{model_config.loss_exponent_max}], scale_power={model_config.loss_scale_power}, "
               f"compression={model_config.loss_compression_scale}, "
               f"loss={model_config.numeric_loss}, "
-              f"path_beta={model_config.numeric_path_beta}, "
               f"path_gamma={model_config.numeric_path_gamma}, "
               f"path_film={model_config.numeric_path_film}, "
               f"huber_delta={model_config.numeric_huber_delta}, "
-              f"output={model_config.numeric_output}, "
               f"pred_scale={model_config.prediction_scale}, "
               f"pred_bias={model_config.prediction_bias}, "
               f"pred_min={model_config.prediction_min_value}, "
@@ -1013,12 +994,9 @@ def main():
         f"loss_scale_power={model_config.loss_scale_power}, "
         f"loss_compression_scale={model_config.loss_compression_scale}, "
         f"numeric_loss={model_config.numeric_loss}, "
-        f"numeric_path_beta={model_config.numeric_path_beta}, "
         f"numeric_path_gamma={model_config.numeric_path_gamma}, "
         f"numeric_path_film={model_config.numeric_path_film}, "
         f"numeric_huber_delta={model_config.numeric_huber_delta}, "
-        f"numeric_output={model_config.numeric_output}, "
-        f"numeric_softplus_beta={model_config.numeric_softplus_beta}, "
         f"prediction_scale={model_config.prediction_scale}, "
         f"prediction_bias={model_config.prediction_bias}, "
         f"prediction_min_value={model_config.prediction_min_value}, "

@@ -25,7 +25,7 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
-`checkpoints/20260611_132724_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+`checkpoints/20260612_000908_matbench_mp_gap_comp_cewald_cnn_dropcoords`
 
 Checkpoint:
 
@@ -33,27 +33,28 @@ Checkpoint:
 
 This is a single checkpoint from a 200-epoch cosine-schedule run with the best
 generic recipe found so far:
-`dropout=0.05 + numeric_path_film + bias_discrete_depths`.
-It applies train-only scalar calibration fitted only on the official train
-subset. No held-out test targets are loaded or used.
+`dropout=0.05 + numeric_path_film`.
+It uses the standard linear numeric output head and no target prior, zero head,
+same-parent bias, softplus output, checkpoint averaging, or held-out test
+targets.
 
 Result:
 
-- Raw internal-val MAE: `0.17965497241258405`
-- Raw best epoch: `145`
-- Final epoch raw internal-val MAE: `0.18010168557175305`
-- Calibration-script raw internal-val MAE: `0.17964934634434743`
-- Scalar calibrated internal-val MAE: `0.17819127034692456`
-- Binned-residual calibrated internal-val MAE: `0.1781657682783476`
-- Scalar calibrated train MAE: `0.01874356837319561`
+- Raw internal-val MAE: `0.17755264310059982`
+- Raw best epoch: `162`
+- Final epoch raw internal-val MAE: `0.1777353338192085`
+- Calibration-script raw internal-val MAE: `0.1775638081797167`
+- Scalar calibrated internal-val MAE: `0.17650236748448264`
+- Binned-residual calibrated internal-val MAE: `0.176367896808791`
+- Scalar calibrated train MAE: `0.01569519434731938`
 - `prediction_scale`: `0.988793103448276`
-- `prediction_bias`: `-0.0006633100260434481`
+- `prediction_bias`: `0.0008863742399061549`
 - `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.024`
+- `prediction_zero_threshold`: `0.016`
 - Binned-residual bins: `6`
 - Binned-residual shrinkage: `5000.0`
 - Checkpoint source: single best-val checkpoint, not a checkpoint average
-- Raw negative fraction: `0.14618918600541878`
+- Raw negative fraction: `0.22864883967487337`
 
 ## Current Best 80-Epoch Clean Internal-Val Screen
 
@@ -1327,62 +1328,7 @@ scale/shift terms from the JSON path embedding for number tokens. The 20-epoch
 probe is ahead of the matched dropout baseline at the same epoch, but it is not
 yet evidence of a final improvement over the current 80-epoch best
 (`0.181177` binned calibrated). This direction is worth a longer controlled run
-or a smaller beta-only variant; it should stay separate from the rejected
-target-prior direction.
-
-## Numeric Path Beta Probe
-
-Run directory:
-
-`checkpoints/20260611_002050_matbench_mp_gap_comp_cewald_cnn_dropcoords`
-
-Training command:
-
-```bash
-env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
-  --dataset matbench_mp_gap --model-size large \
-  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
-  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
-  --max-epochs 20 --patience 20 --max-cpu-workers 4 \
-  --checkpoint-interval 10 --log-every 250 --eval-train-every 0 \
-  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
-  --dropout 0.05 --numeric-path-beta
-```
-
-Training result:
-
-- Best raw internal-val MAE: `0.22815094612611625`
-- Best raw epoch: `20`
-- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
-- Short-run curve comparison:
-  - Matched dropout baseline E10/E15/E20: `0.29045779890786744` /
-    `0.2529337770222255` / `0.23568223023731574`
-  - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
-    `0.23928665507798033` / `0.22548361537685974`
-  - Numeric path beta E10/E15/E20: `0.2771256336458818` /
-    `0.23767161282216867` / `0.22815094612611625`
-
-Train-only calibration result:
-
-- `prediction_scale`: `0.9947413793103449`
-- `prediction_bias`: `-0.006147264121742598`
-- `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.23600000000000002`
-- Train raw MAE: `0.14584798282419445`
-- Train calibrated MAE: `0.13660233288846577`
-- Internal-val raw MAE: `0.2281535316455807`
-- Internal-val calibrated MAE: `0.22108429056684045`
-- Binned-residual calibrated train MAE: `0.13646759015376245`
-- Binned-residual calibrated internal-val MAE: `0.22094347563668637`
-
-Conclusion: the beta-only path-conditioned numeric encoder is a positive
-short-run signal versus the matched dropout baseline, though slightly weaker
-than the full FiLM variant at 20 epochs. The result supports the field-aware
-numeric-encoding direction while suggesting that multiplicative path scaling is
-currently useful. Separately, structural-bias ablations should not be discarded
-only because they fail to beat the strongest dropout run in isolation; small
-positive or mechanism-distinct signals such as `same_parent` should be tested as
-combinations on the current strong baseline.
+and should stay separate from the rejected target-prior direction.
 
 ## Same-Parent Bias on Dropout Baseline
 
@@ -1596,7 +1542,7 @@ Train-only calibration result:
 Conclusion: switching `first_diff` and `tree_dist` from continuous sinusoidal
 features to learnable categorical depth embeddings is a clean positive result
 over the matched dropout baseline. It is slightly stronger than the
-`numeric_path_beta` probe at 20 epochs, but weaker than `numeric_path_film` and
+matched dropout baseline at 20 epochs, but weaker than `numeric_path_film` and
 `same_parent`. Because `same_parent` is largely a special case of
 `tree_dist == 2`, the next structural-bias work should avoid stacking the two
 directly and instead separate which generic depth signal benefits most from
@@ -1956,57 +1902,6 @@ not helped by an additional same-template attention bias here. Future work
 should focus on FiLM parameterization and numeric encoding rather than stacking
 this structural relation.
 
-## Numeric Path Beta 80-Epoch Schedule
-
-Run directory:
-
-`checkpoints/20260611_095040_matbench_mp_gap_comp_cewald_cnn_dropcoords`
-
-Training command:
-
-```bash
-env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
-  --dataset matbench_mp_gap --model-size large \
-  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
-  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
-  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
-  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
-  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
-  --numeric-path-beta
-```
-
-Training result:
-
-- Best raw internal-val MAE: `0.1854656840265659`
-- Best raw epoch: `72`
-- Final epoch raw internal-val MAE: `0.1864444200833746`
-- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
-- Late-epoch raw internal-val MAE:
-  - E60/E65/E70/E75/E80: `0.1926359522576631` /
-    `0.18844940193173026` / `0.18822398324447118` /
-    `0.18683868030427445` / `0.1864444200833746`
-
-Train-only calibration result:
-
-- `prediction_scale`: `0.9788793103448277`
-- `prediction_bias`: `0.002472669333380101`
-- `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.0632273206938508`
-- Train raw MAE: `0.05453122441355281`
-- Train calibrated MAE: `0.04374708309146335`
-- Internal-val raw MAE: `0.18547552619715424`
-- Internal-val calibrated MAE: `0.18049102536700246`
-- Binned-residual calibrated train MAE: `0.04372943309704913`
-- Binned-residual calibrated internal-val MAE: `0.18039327389929605`
-
-Conclusion: beta-only path conditioning captures much of the benefit of
-`numeric_path_film`, but it does not match full FiLM. The raw result is close
-to the better long-run schedules, while train-only calibration lands near the
-three-way `dropout + discrete + FiLM` result and clearly behind FiLM-only. This
-strongly suggests that path-conditioned additive offsets are useful, but the
-FiLM multiplicative gamma branch provides the extra calibration/gap needed for
-the current best.
-
 ## Numeric Path Gamma 80-Epoch Schedule
 
 Run directory:
@@ -2050,11 +1945,9 @@ Train-only calibration result:
 - Binned-residual calibrated train MAE: `0.04394524239027421`
 - Binned-residual calibrated internal-val MAE: `0.18113993278640972`
 
-Conclusion: gamma-only path conditioning is useful but weaker than beta-only
-and much weaker than full FiLM after train-only calibration. The result
-supports an interaction view: beta and gamma each help, but FiLM's calibrated
-gain comes from learning both a path-conditioned additive offset and a
-path-conditioned multiplicative rescaling together.
+Conclusion: gamma-only path conditioning is useful but weaker than full FiLM,
+especially after train-only calibration. This keeps the active numeric-encoding
+direction focused on full path FiLM rather than narrower one-branch variants.
 
 ## Numeric Path FiLM With Dropout 0.15 80-Epoch Schedule
 
@@ -2164,6 +2057,69 @@ no-leakage optimization. The run also clarifies that the 80-epoch screen was
 useful for choosing candidates but systematically undertrained this recipe
 relative to a 200-epoch schedule.
 
+Update after the 200-epoch `dropout=0.05 + numeric_path_film` run: this
+three-way result is no longer the best raw generic recipe. Removing discrete
+depths while keeping lower dropout and FiLM improved raw MAE to `0.17755264`,
+so discrete depth bias appears to interact negatively with this long schedule.
+
+## Dropout 0.05 Plus FiLM 200-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260612_000908_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
+  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --numeric-path-film
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.17755264310059982`
+- Best raw epoch: `162`
+- Final epoch raw internal-val MAE: `0.1777353338192085`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Periodic raw internal-val MAE:
+  - E20/E40/E60/E80/E100: `0.24675795666294906` /
+    `0.20904421982254864` / `0.1971089055090458` /
+    `0.18993417737411902` / `0.18400919620288228`
+  - E120/E140/E160/E162/E180/E200: `0.18486585250409607` /
+    `0.17827251897380134` / `0.17791753419884834` /
+    `0.17755264310059982` / `0.1779379577447564` /
+    `0.1777353338192085`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `0.0008863742399061549`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.016`
+- Train raw MAE: `0.02061126311319286`
+- Train calibrated MAE: `0.01569519434731938`
+- Internal-val raw MAE: `0.1775638081797167`
+- Internal-val calibrated MAE: `0.17650236748448264`
+- Binned-residual calibrated train MAE: `0.015031296575566806`
+- Binned-residual calibrated internal-val MAE: `0.176367896808791`
+- Raw negative fraction on internal val: `0.22864883967487337`
+- Calibrated zero fraction on internal val: `0.4060548945694428`
+- Target zero fraction on internal val: `0.4439863352573919`
+
+Conclusion: the best generic raw result is now the two-way
+`dropout=0.05 + numeric_path_film` recipe. It beats the three-way
+`dropout=0.05 + bias_discrete_depths + numeric_path_film` run by about
+`0.00210` raw MAE (`0.17755` vs `0.17965`) and therefore suggests that
+discrete depth bias is not composing well with FiLM under the full 200-epoch
+budget. The raw result is also better than the rejected softplus-output probe,
+so the current direction can stay fully generic and linear-output.
+
 ## Numeric Path FiLM 200-Epoch Schedule
 
 Run directory:
@@ -2223,7 +2179,7 @@ much of the gain comes from train-fitted min/threshold correction. The next
 useful line is to make FiLM's raw output distribution healthier, not to stack
 more post-processing.
 
-## Dropout 0.05 Plus Discrete Depths Plus FiLM Softplus 200-Epoch Schedule
+## Rejected Softplus-Output Historical Probe
 
 Run directory:
 
@@ -2274,22 +2230,21 @@ Train-only calibration result:
 - Calibrated zero fraction on internal val: `0.41712804806219816`
 - Target zero fraction on internal val: `0.4439863352573919`
 
-Conclusion: adding a softplus numeric output to the three-way recipe gives the
-best raw single-fold result so far and directly fixes the high-negative-output
-failure mode seen in FiLM-only models. The improvement is not a dirty zero
-classifier or target prior: it is a generic decode-head constraint suitable for
-nonnegative numeric targets such as band gap. Train-only scalar calibration
-still gives a small improvement, but binned residual correction no longer helps,
-which is consistent with a healthier raw prediction distribution.
+Conclusion: this line is now rejected and removed from the active code path.
+Although this historical probe improved over the three-way linear run, it is
+target-property-specific and therefore less general than the structural numeric
+encoding direction requested for this project. It also no longer wins on raw
+MAE after the `dropout=0.05 + numeric_path_film` 200-epoch run reached
+`0.17755264`.
 
 ## Notes
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
-- The strongest raw result so far is the 200-epoch `dropout=0.05 +
-  numeric_path_film + bias_discrete_depths + numeric_output=softplus` run at
-  `0.17881304`.
-- The strongest train-only-calibrated result so far is the 200-epoch
-  `numeric_path_film` run at `0.17644324`, but it has a high raw negative
-  prediction fraction and is therefore a diagnostic target rather than the
-  healthiest raw model.
+- The strongest raw generic result so far is the 200-epoch `dropout=0.05 +
+  numeric_path_film` run at `0.17755264`.
+- The strongest train-only-calibrated result so far is also the 200-epoch
+  `dropout=0.05 + numeric_path_film` run at `0.17636790` with binned residual
+  calibration, but raw MAE remains the primary model-selection number.
+- Softplus/beta-style output constraints and path beta probes are no longer
+  active candidates.
