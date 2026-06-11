@@ -25,7 +25,7 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
-`checkpoints/20260612_000908_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+`checkpoints/20260612_032244_matbench_mp_gap_comp_cewald_cnn_dropcoords`
 
 Checkpoint:
 
@@ -33,28 +33,28 @@ Checkpoint:
 
 This is a single checkpoint from a 200-epoch cosine-schedule run with the best
 generic recipe found so far:
-`dropout=0.05 + numeric_path_film`.
+`dropout=0.05`.
 It uses the standard linear numeric output head and no target prior, zero head,
 same-parent bias, target-specific output constraint, checkpoint averaging, or
 held-out test targets.
 
 Result:
 
-- Raw internal-val MAE: `0.17755264310059982`
+- Raw internal-val MAE: `0.17378068549692496`
 - Raw best epoch: `162`
-- Final epoch raw internal-val MAE: `0.1777353338192085`
-- Calibration-script raw internal-val MAE: `0.1775638081797167`
-- Scalar calibrated internal-val MAE: `0.17650236748448264`
-- Binned-residual calibrated internal-val MAE: `0.176367896808791`
-- Scalar calibrated train MAE: `0.01569519434731938`
+- Final epoch raw internal-val MAE: `0.17415659599051114`
+- Calibration-script raw internal-val MAE: `0.1737909182060871`
+- Scalar calibrated internal-val MAE: `0.1726249127491357`
+- Binned-residual calibrated internal-val MAE: `0.17255041122174672`
+- Scalar calibrated train MAE: `0.015568410100434554`
 - `prediction_scale`: `0.988793103448276`
-- `prediction_bias`: `0.0008863742399061549`
+- `prediction_bias`: `0.0011020271685616724`
 - `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.016`
+- `prediction_zero_threshold`: `0.017251522263897427`
 - Binned-residual bins: `6`
 - Binned-residual shrinkage: `5000.0`
 - Checkpoint source: single best-val checkpoint, not a checkpoint average
-- Raw negative fraction: `0.22864883967487337`
+- Raw negative fraction: `0.23018023324302037`
 
 ## Current Best 80-Epoch Clean Internal-Val Screen
 
@@ -2115,6 +2115,67 @@ Conclusion: the best generic raw result is now the two-way
 discrete depth bias is not composing well with FiLM under the full 200-epoch
 budget. The current direction stays fully generic and linear-output.
 
+Update after the 200-epoch `dropout=0.05` run: the FiLM component is not needed
+for the best raw result on this split. Dropout-only improved raw MAE to
+`0.17378069`, about `0.00377` better than this two-way run, while keeping the
+model fully generic.
+
+## Dropout 0.05 200-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260612_032244_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
+  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.17378068549692496`
+- Best raw epoch: `162`
+- Final epoch raw internal-val MAE: `0.17415659599051114`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Periodic raw internal-val MAE:
+  - E20/E40/E60/E80/E100: `0.23785943320887043` /
+    `0.2155134393746334` / `0.19709174230248788` /
+    `0.1874223986894226` / `0.18306400601013606`
+  - E120/E140/E160/E162/E180/E200: `0.18252378478824918` /
+    `0.17656989770352888` / `0.17503569884757414` /
+    `0.17378068549692496` / `0.17456835679161928` /
+    `0.17415659599051114`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.988793103448276`
+- `prediction_bias`: `0.0011020271685616724`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.017251522263897427`
+- Train raw MAE: `0.02108760913837708`
+- Train calibrated MAE: `0.015568410100434554`
+- Internal-val raw MAE: `0.1737909182060871`
+- Internal-val calibrated MAE: `0.1726249127491357`
+- Binned-residual calibrated train MAE: `0.015277849332969095`
+- Binned-residual calibrated internal-val MAE: `0.17255041122174672`
+- Raw negative fraction on internal val: `0.23018023324302037`
+- Calibrated zero fraction on internal val: `0.4114736718105784`
+- Target zero fraction on internal val: `0.4439863352573919`
+
+Conclusion: this is the current best clean raw result on the single official
+fold-0 internal validation split. The improvement is a generic training
+regularization change, not a target-specific head or post-hoc test adjustment.
+The remaining 200-epoch combinations should still be completed to isolate
+whether discrete depth bias helps with or without lower dropout.
+
 ## Numeric Path FiLM 200-Epoch Schedule
 
 Run directory:
@@ -2178,10 +2239,10 @@ more post-processing.
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
-- The strongest raw generic result so far is the 200-epoch `dropout=0.05 +
-  numeric_path_film` run at `0.17755264`.
+- The strongest raw generic result so far is the 200-epoch `dropout=0.05` run
+  at `0.17378069`.
 - The strongest train-only-calibrated result so far is also the 200-epoch
-  `dropout=0.05 + numeric_path_film` run at `0.17636790` with binned residual
-  calibration, but raw MAE remains the primary model-selection number.
+  `dropout=0.05` run at `0.17255041` with binned residual calibration, but raw
+  MAE remains the primary model-selection number.
 - Target-specific output constraints and path-parameter probes are no longer
   active candidates.
