@@ -25,7 +25,7 @@ The held-out Matbench test fold is kept blind during optimization.
 
 Run directory:
 
-`checkpoints/20260611_182039_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+`checkpoints/20260611_210324_matbench_mp_gap_comp_cewald_cnn_dropcoords`
 
 Checkpoint:
 
@@ -33,9 +33,49 @@ Checkpoint:
 
 This is a single checkpoint from a 200-epoch cosine-schedule run with the best
 raw recipe plus a nonnegative numeric output constraint:
-`dropout=0.05 + numeric_path_film + bias_discrete_depths + numeric_output=softplus`.
+`dropout=0.05 + numeric_path_film + bias_discrete_depths + numeric_output=softplus`
+with `numeric_softplus_beta=2.0`.
 It applies train-only scalar calibration fitted only on the official train
 subset. No held-out test targets are loaded or used.
+
+Result:
+
+- Raw internal-val MAE: `0.17701122088408908`
+- Raw best epoch: `157`
+- Final epoch raw internal-val MAE: `0.17827532860236972`
+- Calibration-script raw internal-val MAE: `0.17701736558006473`
+- Scalar calibrated internal-val MAE: `0.17621669229875883`
+- Binned-residual calibrated internal-val MAE: `0.17619659710244737`
+- Scalar calibrated train MAE: `0.015704031575160423`
+- Binned-residual calibrated train MAE: `0.015671488072245728`
+- `prediction_scale`: `0.9907758620689655`
+- `prediction_bias`: `-0.0009242575486282946`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.011026682164931493`
+- Binned-residual bins: `6`
+- Binned-residual shrinkage: `5000.0`
+- Binned-residual zero threshold: `0.010075524294008887`
+- Checkpoint source: single best-val checkpoint, not a checkpoint average
+- Raw negative fraction: `0.0`
+
+This improves the previous softplus-beta-1.0 raw best from `0.17881304` to
+`0.17701122` while keeping the raw prediction negative fraction at `0.0`.
+The scalar calibration gain is modest (`0.17701737` raw from the calibration
+script to `0.17621669` calibrated), so the main improvement is already present
+in the raw model rather than coming from post-training calibration.
+
+## Previous Softplus Beta-1.0 Result
+
+Run directory:
+
+`checkpoints/20260611_182039_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Checkpoint:
+
+`matbench_mp_gap_train_best_val.pth`
+
+This is the same 200-epoch recipe as the current best, but with the default
+`numeric_softplus_beta=1.0`.
 
 Result:
 
@@ -53,13 +93,6 @@ Result:
 - Binned-residual shrinkage: `5000.0`
 - Binned-residual zero threshold: `0.012191449678981711`
 - Checkpoint source: single best-val checkpoint, not a checkpoint average
-
-This improves the previous raw best from `0.17965497` to `0.17881304` while
-forcing the raw prediction negative fraction to `0.0`. The scalar calibration
-gain is small (`0.17881435` raw from the calibration script to `0.17812288`
-calibrated), and conservative binned residual correction does not help this
-run, so this is mainly a healthier raw model rather than a result dominated by
-post-training calibration.
 
 ## Current Best 80-Epoch Clean Internal-Val Screen
 
