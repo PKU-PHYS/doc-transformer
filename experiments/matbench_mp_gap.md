@@ -12,7 +12,16 @@ The held-out Matbench test fold is kept blind during optimization.
 - Selection/calibration data: train/internal-val only
 - Resource policy: single 24 GB GPU, CPU workers capped to 4-8
 
-## Current Best Clean Internal-Val Result
+## Training Budget Policy
+
+- The 80-epoch runs below are screening runs used to compare multiple
+  structure/training ablations under a shared budget.
+- They are not final apples-to-apples comparisons with earlier 200-epoch
+  experiments.
+- Candidate recipes selected from the 80-epoch screen should be promoted to a
+  200-epoch run before treating them as serious final candidates.
+
+## Current Best 80-Epoch Clean Internal-Val Result
 
 Run directory:
 
