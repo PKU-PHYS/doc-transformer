@@ -35,8 +35,8 @@ This is a single checkpoint from a 200-epoch cosine-schedule run with the best
 generic recipe found so far:
 `dropout=0.05 + numeric_path_film`.
 It uses the standard linear numeric output head and no target prior, zero head,
-same-parent bias, softplus output, checkpoint averaging, or held-out test
-targets.
+same-parent bias, target-specific output constraint, checkpoint averaging, or
+held-out test targets.
 
 Result:
 
@@ -1359,8 +1359,6 @@ Training result:
     `0.2529337770222255` / `0.23568223023731574`
   - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
     `0.23928665507798033` / `0.22548361537685974`
-  - Numeric path beta E10/E15/E20: `0.2771256336458818` /
-    `0.23767161282216867` / `0.22815094612611625`
   - Same-parent bias E10/E15/E20: `0.2672322339495805` /
     `0.23332767412909886` / `0.22355039390925138`
 
@@ -1517,8 +1515,6 @@ Training result:
 - Short-run curve comparison:
   - Matched dropout baseline E10/E15/E20: `0.29045779890786744` /
     `0.2529337770222255` / `0.23568223023731574`
-  - Numeric path beta E10/E15/E20: `0.2771256336458818` /
-    `0.23767161282216867` / `0.22815094612611625`
   - Numeric path FiLM E10/E15/E20: `0.27216284520585693` /
     `0.23928665507798033` / `0.22548361537685974`
   - Same-parent bias E10/E15/E20: `0.2672322339495805` /
@@ -2117,8 +2113,7 @@ Conclusion: the best generic raw result is now the two-way
 `dropout=0.05 + bias_discrete_depths + numeric_path_film` run by about
 `0.00210` raw MAE (`0.17755` vs `0.17965`) and therefore suggests that
 discrete depth bias is not composing well with FiLM under the full 200-epoch
-budget. The raw result is also better than the rejected softplus-output probe,
-so the current direction can stay fully generic and linear-output.
+budget. The current direction stays fully generic and linear-output.
 
 ## Numeric Path FiLM 200-Epoch Schedule
 
@@ -2179,64 +2174,6 @@ much of the gain comes from train-fitted min/threshold correction. The next
 useful line is to make FiLM's raw output distribution healthier, not to stack
 more post-processing.
 
-## Rejected Softplus-Output Historical Probe
-
-Run directory:
-
-`checkpoints/20260611_182039_matbench_mp_gap_comp_cewald_cnn_dropcoords`
-
-Training command:
-
-```bash
-env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
-  --dataset matbench_mp_gap --model-size large \
-  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
-  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
-  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
-  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
-  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
-  --dropout 0.05 --bias-discrete-depths --numeric-path-film \
-  --numeric-output softplus
-```
-
-Training result:
-
-- Best raw internal-val MAE: `0.17881303710711297`
-- Best raw epoch: `139`
-- Final epoch raw internal-val MAE: `0.17994268767670255`
-- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
-- Periodic raw internal-val MAE:
-  - E20/E40/E60/E80/E100: `0.2372179451241298` /
-    `0.2068643024899877` / `0.1954102280347106` /
-    `0.19272499982412722` / `0.18624657226484503`
-  - E120/E139/E140/E160/E180/E200: `0.18320705505153795` /
-    `0.17881303710711297` / `0.18009617597085628` /
-    `0.1806064859619391` / `0.17974487234490497` /
-    `0.17994268767670255`
-
-Train-only calibration result:
-
-- `prediction_scale`: `0.9927586206896553`
-- `prediction_bias`: `-0.0011391912171103318`
-- `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.018000000000000002`
-- Train raw MAE: `0.023106647078562314`
-- Train calibrated MAE: `0.02007857954643171`
-- Internal-val raw MAE: `0.1788143511368099`
-- Internal-val calibrated MAE: `0.17812287656909076`
-- Binned-residual calibrated train MAE: `0.019706615475701593`
-- Binned-residual calibrated internal-val MAE: `0.17821151011532976`
-- Raw negative fraction on internal val: `0.0`
-- Calibrated zero fraction on internal val: `0.41712804806219816`
-- Target zero fraction on internal val: `0.4439863352573919`
-
-Conclusion: this line is now rejected and removed from the active code path.
-Although this historical probe improved over the three-way linear run, it is
-target-property-specific and therefore less general than the structural numeric
-encoding direction requested for this project. It also no longer wins on raw
-MAE after the `dropout=0.05 + numeric_path_film` 200-epoch run reached
-`0.17755264`.
-
 ## Notes
 
 - These are not final official Matbench test results.
@@ -2246,5 +2183,5 @@ MAE after the `dropout=0.05 + numeric_path_film` 200-epoch run reached
 - The strongest train-only-calibrated result so far is also the 200-epoch
   `dropout=0.05 + numeric_path_film` run at `0.17636790` with binned residual
   calibration, but raw MAE remains the primary model-selection number.
-- Softplus/beta-style output constraints and path beta probes are no longer
+- Target-specific output constraints and path-parameter probes are no longer
   active candidates.
