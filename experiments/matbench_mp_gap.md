@@ -1934,6 +1934,57 @@ not helped by an additional same-template attention bias here. Future work
 should focus on FiLM parameterization and numeric encoding rather than stacking
 this structural relation.
 
+## Numeric Path Beta 80-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_095040_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-path-beta
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.1854656840265659`
+- Best raw epoch: `72`
+- Final epoch raw internal-val MAE: `0.1864444200833746`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.1926359522576631` /
+    `0.18844940193173026` / `0.18822398324447118` /
+    `0.18683868030427445` / `0.1864444200833746`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `0.002472669333380101`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.0632273206938508`
+- Train raw MAE: `0.05453122441355281`
+- Train calibrated MAE: `0.04374708309146335`
+- Internal-val raw MAE: `0.18547552619715424`
+- Internal-val calibrated MAE: `0.18049102536700246`
+- Binned-residual calibrated train MAE: `0.04372943309704913`
+- Binned-residual calibrated internal-val MAE: `0.18039327389929605`
+
+Conclusion: beta-only path conditioning captures much of the benefit of
+`numeric_path_film`, but it does not match full FiLM. The raw result is close
+to the better long-run schedules, while train-only calibration lands near the
+three-way `dropout + discrete + FiLM` result and clearly behind FiLM-only. This
+strongly suggests that path-conditioned additive offsets are useful, but the
+FiLM multiplicative gamma branch provides the extra calibration/gap needed for
+the current best.
+
 ## Notes
 
 - These are not final official Matbench test results.
