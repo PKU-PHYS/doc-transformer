@@ -678,6 +678,9 @@ def main():
     parser.add_argument("--numeric-path-beta", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Add a path-conditioned zero-initialized beta offset to numeric value embeddings")
+    parser.add_argument("--numeric-path-gamma", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Modulate numeric value embeddings with a path-conditioned multiplicative gamma")
     parser.add_argument("--numeric-path-film", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Modulate numeric value embeddings with their JSON path embeddings")
@@ -759,10 +762,19 @@ def main():
         model_config.numeric_loss = args.numeric_loss
     if args.numeric_path_beta is not None:
         model_config.numeric_path_beta = args.numeric_path_beta
+    if args.numeric_path_gamma is not None:
+        model_config.numeric_path_gamma = args.numeric_path_gamma
     if args.numeric_path_film is not None:
         model_config.numeric_path_film = args.numeric_path_film
-    if model_config.numeric_path_beta and model_config.numeric_path_film:
-        parser.error("--numeric-path-beta and --numeric-path-film are mutually exclusive")
+    if sum(
+        bool(x)
+        for x in (
+            model_config.numeric_path_beta,
+            model_config.numeric_path_gamma,
+            model_config.numeric_path_film,
+        )
+    ) > 1:
+        parser.error("--numeric-path-beta, --numeric-path-gamma, and --numeric-path-film are mutually exclusive")
     if args.numeric_huber_delta is not None:
         model_config.numeric_huber_delta = args.numeric_huber_delta
     if args.numeric_output is not None:
@@ -821,6 +833,7 @@ def main():
               f"compression={model_config.loss_compression_scale}, "
               f"loss={model_config.numeric_loss}, "
               f"path_beta={model_config.numeric_path_beta}, "
+              f"path_gamma={model_config.numeric_path_gamma}, "
               f"path_film={model_config.numeric_path_film}, "
               f"huber_delta={model_config.numeric_huber_delta}, "
               f"output={model_config.numeric_output}, "
@@ -881,6 +894,7 @@ def main():
               f"compression={model_config.loss_compression_scale}, "
               f"loss={model_config.numeric_loss}, "
               f"path_beta={model_config.numeric_path_beta}, "
+              f"path_gamma={model_config.numeric_path_gamma}, "
               f"path_film={model_config.numeric_path_film}, "
               f"huber_delta={model_config.numeric_huber_delta}, "
               f"output={model_config.numeric_output}, "
@@ -1000,6 +1014,7 @@ def main():
         f"loss_compression_scale={model_config.loss_compression_scale}, "
         f"numeric_loss={model_config.numeric_loss}, "
         f"numeric_path_beta={model_config.numeric_path_beta}, "
+        f"numeric_path_gamma={model_config.numeric_path_gamma}, "
         f"numeric_path_film={model_config.numeric_path_film}, "
         f"numeric_huber_delta={model_config.numeric_huber_delta}, "
         f"numeric_output={model_config.numeric_output}, "

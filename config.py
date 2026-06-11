@@ -36,6 +36,7 @@ class ModelConfig:
     # 用 JSON path embedding 对数值 token 做字段条件化调制。
     # 零初始化，开启时训练初始行为等价于旧数值编码。
     numeric_path_beta: bool = False
+    numeric_path_gamma: bool = False
     numeric_path_film: bool = False
     
     # 科学计数法解构 (Mantissa-Exponent Split)

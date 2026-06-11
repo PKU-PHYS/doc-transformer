@@ -53,11 +53,14 @@ class ValueEncoder(nn.Module):
     def __init__(self, d_model: int, frozen_lm_dim: int, n_fourier_feats: int, fourier_learnable: bool,
                  exponent_min: int = -50, exponent_max: int = 49,
                  numeric_path_beta: bool = False,
+                 numeric_path_gamma: bool = False,
                  numeric_path_film: bool = False):
         super().__init__()
-        if numeric_path_beta and numeric_path_film:
-            raise ValueError("numeric_path_beta and numeric_path_film are mutually exclusive.")
+        enabled_path_modes = sum(bool(x) for x in (numeric_path_beta, numeric_path_gamma, numeric_path_film))
+        if enabled_path_modes > 1:
+            raise ValueError("numeric_path_beta, numeric_path_gamma, and numeric_path_film are mutually exclusive.")
         self.numeric_path_beta = numeric_path_beta
+        self.numeric_path_gamma = numeric_path_gamma
         self.numeric_path_film = numeric_path_film
         
         # ── 数值型编码：Base-2 科学计数法解构 ──
@@ -78,6 +81,12 @@ class ValueEncoder(nn.Module):
             nn.init.zeros_(self.numeric_path_beta_proj.bias)
         else:
             self.numeric_path_beta_proj = None
+        if numeric_path_gamma:
+            self.numeric_path_gamma_proj = nn.Linear(d_model, d_model)
+            nn.init.zeros_(self.numeric_path_gamma_proj.weight)
+            nn.init.zeros_(self.numeric_path_gamma_proj.bias)
+        else:
+            self.numeric_path_gamma_proj = None
         if numeric_path_film:
             self.numeric_path_film_proj = nn.Linear(d_model, 2 * d_model)
             nn.init.zeros_(self.numeric_path_film_proj.weight)
@@ -102,7 +111,7 @@ class ValueEncoder(nn.Module):
         raw_values: 长度为 N 的原始值列表，如 [2.1, "TiO2", "[MASK]", ...]
         lm_embeddings: 如果该 batch 中有 string，需在外部先用 FrozenLM 算出 (N_str, lm_dim) 传入。
                        如果没有 string，可传 None。
-        path_context: 可选 (N, d_model) 路径上下文；启用 numeric_path_beta/film 时只调制 number token。
+        path_context: 可选 (N, d_model) 路径上下文；启用 numeric_path_beta/gamma/film 时只调制 number token。
         返回: (N, d_model) 的特征表示
         """
         N = len(node_types)
@@ -146,11 +155,14 @@ class ValueEncoder(nn.Module):
             m_emb = self.mantissa_encoder(m_tensor)   # (N_num, d_model) — 傅里叶编码尾数
             e_emb = self.exponent_embed(e_indices)     # (N_num, d_model) — 查表获取量级
             num_emb = m_emb + e_emb  # 直接相加，与 pos+token embedding 范式一致
-            if self.numeric_path_beta or self.numeric_path_film:
+            if self.numeric_path_beta or self.numeric_path_gamma or self.numeric_path_film:
                 if path_context is None:
-                    raise ValueError("numeric_path_beta/film requires path_context.")
+                    raise ValueError("numeric_path_beta/gamma/film requires path_context.")
             if self.numeric_path_beta:
                 num_emb = num_emb + self.numeric_path_beta_proj(path_context[num_indices])
+            if self.numeric_path_gamma:
+                gamma = self.numeric_path_gamma_proj(path_context[num_indices])
+                num_emb = num_emb * (1.0 + torch.tanh(gamma))
             if self.numeric_path_film:
                 gamma_beta = self.numeric_path_film_proj(path_context[num_indices])
                 gamma, beta = gamma_beta.chunk(2, dim=-1)
