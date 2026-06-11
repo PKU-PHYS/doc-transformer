@@ -1884,6 +1884,56 @@ calibration are not perfectly aligned, so follow-up work should evaluate FiLM
 variants that improve raw MAE without destroying this favorable calibration
 behavior.
 
+## Numeric Path FiLM Plus Same-Path-Template 80-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_085351_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-path-film --bias-same-path-template
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19043274807943122`
+- Best raw epoch: `75`
+- Final epoch raw internal-val MAE: `0.19096141426642235`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.19648339801560036` /
+    `0.19230500079506221` / `0.19091610911265797` /
+    `0.19043274807943122` / `0.19096141426642235`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9729310344827586`
+- `prediction_bias`: `0.00031862725953346697`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.058`
+- Train raw MAE: `0.05869130651316069`
+- Train calibrated MAE: `0.041816384083505166`
+- Internal-val raw MAE: `0.19044858991308417`
+- Internal-val calibrated MAE: `0.18411754153387358`
+- Binned-residual calibrated train MAE: `0.04169296227988686`
+- Binned-residual calibrated internal-val MAE: `0.18407671758863553`
+
+Conclusion: adding `same_path_template` to `numeric_path_film` is a clear
+negative interaction on this fold. It is much worse than FiLM alone in both raw
+and train-only-calibrated MAE, so the path-conditioned numeric embedding is
+not helped by an additional same-template attention bias here. Future work
+should focus on FiLM parameterization and numeric encoding rather than stacking
+this structural relation.
+
 ## Notes
 
 - These are not final official Matbench test results.
