@@ -329,7 +329,7 @@ def _load_run_metadata_for_checkpoint(checkpoint_path):
 
 
 def _apply_architecture_metadata(model_config, metadata):
-    """Restore config fields that change checkpoint parameter shapes."""
+    """Restore model fields needed to evaluate raw checkpoint predictions."""
     saved_model_config = metadata.get("model_config", {})
     for key in (
         "bias_is_group_fork",
@@ -344,6 +344,8 @@ def _apply_architecture_metadata(model_config, metadata):
         "numeric_path_beta",
         "numeric_path_gamma",
         "numeric_path_film",
+        "numeric_output",
+        "numeric_softplus_beta",
     ):
         if key in saved_model_config:
             setattr(model_config, key, saved_model_config[key])
@@ -453,7 +455,6 @@ def main():
     model_config, _ = get_configs(args.model_size)
     _apply_architecture_metadata(model_config, metadata)
     model_config.loss_compression_scale = args.loss_compression_scale
-    model_config.numeric_output = "linear"
     model_config.use_zero_head = False
     model_config.prediction_scale = 1.0
     model_config.prediction_bias = 0.0
