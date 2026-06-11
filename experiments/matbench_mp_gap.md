@@ -2034,10 +2034,60 @@ supports an interaction view: beta and gamma each help, but FiLM's calibrated
 gain comes from learning both a path-conditioned additive offset and a
 path-conditioned multiplicative rescaling together.
 
+## Numeric Path FiLM With Dropout 0.15 80-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260611_114823_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
+  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --numeric-path-film --dropout 0.15
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.19179518200345544`
+- Best raw epoch: `67`
+- Final epoch raw internal-val MAE: `0.19292397289507424`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Late-epoch raw internal-val MAE:
+  - E60/E65/E70/E75/E80: `0.1948325789333299` /
+    `0.1936935560076876` / `0.1931110240587967` /
+    `0.1927247370921192` / `0.19292397289507424`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9669827586206897`
+- `prediction_bias`: `0.008938057876898555`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.094`
+- Train raw MAE: `0.0770782792671818`
+- Train calibrated MAE: `0.0599644477153044`
+- Internal-val raw MAE: `0.19180032800580063`
+- Internal-val calibrated MAE: `0.18201571819252318`
+- Binned-residual calibrated train MAE: `0.060002687008430464`
+- Binned-residual calibrated internal-val MAE: `0.18198257166939097`
+
+Conclusion: increasing dropout from the default `0.10` to `0.15` is a clear
+negative result for `numeric_path_film`. It slows convergence, worsens raw MAE,
+and also worsens train-only-calibrated MAE. The current evidence does not
+support stronger dropout as a path forward for FiLM; any future dropout search
+should stay near the default rather than moving higher.
+
 ## Notes
 
 - These are not final official Matbench test results.
 - The test fold was not evaluated during any experiment recorded here.
-- The strongest clean improvement so far comes from lowering dropout to `0.05`
-  and training the same single checkpoint for an 80-epoch cosine schedule,
-  followed by train-only scale/bias/nonnegative/zero-threshold calibration.
+- The strongest raw result so far is the three-way `dropout=0.05 +
+  numeric_path_film + bias_discrete_depths` run.
+- The strongest train-only-calibrated result so far is `numeric_path_film` with
+  default dropout.
