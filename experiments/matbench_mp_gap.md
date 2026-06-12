@@ -1898,53 +1898,6 @@ not helped by an additional same-template attention bias here. Future work
 should focus on FiLM parameterization and numeric encoding rather than stacking
 this structural relation.
 
-## Numeric Path Gamma 80-Epoch Schedule
-
-Run directory:
-
-`checkpoints/20260611_105200_matbench_mp_gap_comp_cewald_cnn_dropcoords`
-
-Training command:
-
-```bash
-env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
-  --dataset matbench_mp_gap --model-size large \
-  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
-  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
-  --max-epochs 80 --patience 80 --max-cpu-workers 4 \
-  --checkpoint-interval 10 --log-every 0 --sample-every 0 --eval-train-every 0 \
-  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
-  --numeric-path-gamma
-```
-
-Training result:
-
-- Best raw internal-val MAE: `0.1861711605434854`
-- Best raw epoch: `73`
-- Final epoch raw internal-val MAE: `0.1864775159734493`
-- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
-- Late-epoch raw internal-val MAE:
-  - E60/E65/E70/E75/E80: `0.19145814810225448` /
-    `0.18723653024045323` / `0.1878447578741025` /
-    `0.18661861754267467` / `0.1864775159734493`
-
-Train-only calibration result:
-
-- `prediction_scale`: `0.9788793103448277`
-- `prediction_bias`: `0.0013427254133697214`
-- `prediction_min_value`: `0.0`
-- `prediction_zero_threshold`: `0.060594581244192355`
-- Train raw MAE: `0.05542669501621422`
-- Train calibrated MAE: `0.04398530146551161`
-- Internal-val raw MAE: `0.18616940212120175`
-- Internal-val calibrated MAE: `0.18120019323619593`
-- Binned-residual calibrated train MAE: `0.04394524239027421`
-- Binned-residual calibrated internal-val MAE: `0.18113993278640972`
-
-Conclusion: gamma-only path conditioning is useful but weaker than full FiLM,
-especially after train-only calibration. This keeps the active numeric-encoding
-direction focused on full path FiLM rather than narrower one-branch variants.
-
 ## Numeric Path FiLM With Dropout 0.15 80-Epoch Schedule
 
 Run directory:

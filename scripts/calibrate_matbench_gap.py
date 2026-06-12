@@ -341,7 +341,6 @@ def _apply_architecture_metadata(model_config, metadata):
         "bias_value_type_pair",
         "bias_discrete_depths",
         "bias_discrete_depth_bins",
-        "numeric_path_gamma",
         "numeric_path_film",
     ):
         if key in saved_model_config:
