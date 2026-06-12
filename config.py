@@ -36,6 +36,9 @@ class ModelConfig:
     # 用 JSON path embedding 对数值 token 做字段条件化 FiLM 调制。
     # 零初始化，开启时训练初始行为等价于旧数值编码。
     numeric_path_film: bool = False
+    # 共享 value 文本投影作为 path 文本 adapter：FrozenLM 384 -> d_model 后再进 GRU。
+    # 默认关闭，保持旧 checkpoint 结构；开启后用于验证统一文本 adapter 的归纳偏置。
+    share_text_proj_to_path: bool = False
     
     # 科学计数法解构 (Mantissa-Exponent Split)
     # 指数嵌入的覆盖范围 (bins = max - min + 1, offset = -min)

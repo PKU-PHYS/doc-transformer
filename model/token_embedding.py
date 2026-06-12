@@ -19,6 +19,7 @@ class TokenEmbedding(nn.Module):
         super().__init__()
         self.d_model = config.d_model
         self.frozen_lm_dim = config.frozen_lm_dim
+        self.share_text_proj_to_path = config.share_text_proj_to_path
         
         self.value_encoder = ValueEncoder(
             d_model=config.d_model,
@@ -30,10 +31,8 @@ class TokenEmbedding(nn.Module):
             numeric_path_film=config.numeric_path_film,
         )
         
-        self.path_encoder = GRUPathEncoder(
-            frozen_lm_dim=config.frozen_lm_dim,
-            d_model=config.d_model,
-        )
+        path_input_dim = config.d_model if config.share_text_proj_to_path else config.frozen_lm_dim
+        self.path_encoder = GRUPathEncoder(path_input_dim=path_input_dim, d_model=config.d_model)
 
     def forward(self, leaves: List[LeafNode], frozen_lm: FrozenLM) -> Tensor:
         """
@@ -102,6 +101,8 @@ class TokenEmbedding(nn.Module):
         if row_indices:
             # 一次性高级索引赋值 → 1 次 CUDA 操作代替 N×L 次
             path_text_embs[row_indices, col_indices] = unique_embs[emb_indices]
+        if self.share_text_proj_to_path:
+            path_text_embs = self.value_encoder.text_proj(path_text_embs)
         
         # path_depths 未被 GRU 实际使用，传零张量
         path_depths = torch.zeros(N, max_path_len, dtype=torch.long, device=device)

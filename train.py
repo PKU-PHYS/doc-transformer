@@ -678,6 +678,9 @@ def main():
     parser.add_argument("--numeric-path-film", action=argparse.BooleanOptionalAction,
                         default=None,
                         help="Modulate numeric value embeddings with their JSON path embeddings")
+    parser.add_argument("--share-text-proj-to-path", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Reuse the value text projection as the path-text adapter before the GRU")
     parser.add_argument("--numeric-huber-delta", type=float, default=None,
                         help="Override ModelConfig.numeric_huber_delta")
     parser.add_argument("--prediction-scale", type=float, default=None,
@@ -751,6 +754,8 @@ def main():
         model_config.numeric_loss = args.numeric_loss
     if args.numeric_path_film is not None:
         model_config.numeric_path_film = args.numeric_path_film
+    if args.share_text_proj_to_path is not None:
+        model_config.share_text_proj_to_path = args.share_text_proj_to_path
     if args.numeric_huber_delta is not None:
         model_config.numeric_huber_delta = args.numeric_huber_delta
     if args.prediction_scale is not None:
@@ -787,7 +792,8 @@ def main():
         dataset_options = build_dataset_options(args, mb_config)
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
-              f"H={model_config.n_heads}, ff={model_config.d_ff}")
+              f"H={model_config.n_heads}, ff={model_config.d_ff}, "
+              f"share_text_proj_to_path={model_config.share_text_proj_to_path}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
               f"weight_decay={train_config.weight_decay}, "
               f"bias_lr_mult={train_config.structural_bias_lr_mult}")
@@ -845,7 +851,8 @@ def main():
         eval_metric = "rmse"
 
         print(f"Model: d={model_config.d_model}, L={model_config.n_layers}, "
-              f"H={model_config.n_heads}, ff={model_config.d_ff}")
+              f"H={model_config.n_heads}, ff={model_config.d_ff}, "
+              f"share_text_proj_to_path={model_config.share_text_proj_to_path}")
         print(f"Train: bs={train_config.batch_size}, lr={train_config.lr}, "
               f"weight_decay={train_config.weight_decay}, "
               f"bias_lr_mult={train_config.structural_bias_lr_mult}")
@@ -955,7 +962,8 @@ def main():
     print(f"     Launch: tensorboard --logdir runs/")
 
     writer.add_text("config/model", f"d={model_config.d_model}, L={model_config.n_layers}, "
-                     f"H={model_config.n_heads}, ff={model_config.d_ff}")
+                     f"H={model_config.n_heads}, ff={model_config.d_ff}, "
+                     f"share_text_proj_to_path={model_config.share_text_proj_to_path}")
     writer.add_text("config/train", f"bs={train_config.batch_size}, lr={train_config.lr}, "
                      f"weight_decay={train_config.weight_decay}, "
                      f"bias_lr_mult={train_config.structural_bias_lr_mult}, "

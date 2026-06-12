@@ -342,6 +342,7 @@ def _apply_architecture_metadata(model_config, metadata):
         "bias_discrete_depths",
         "bias_discrete_depth_bins",
         "numeric_path_film",
+        "share_text_proj_to_path",
     ):
         if key in saved_model_config:
             setattr(model_config, key, saved_model_config[key])
