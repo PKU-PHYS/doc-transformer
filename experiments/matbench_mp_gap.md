@@ -2186,6 +2186,61 @@ recipe (`0.17755`) and the three-way `dropout + discrete + FiLM` recipe
 signal, but under this long schedule it does not compose with lower dropout
 well enough to replace the simpler dropout-only model.
 
+## Discrete Depth 200-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260612_081116_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
+  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --bias-discrete-depths
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.17708619417784993`
+- Best raw epoch: `144`
+- Final epoch raw internal-val MAE: `0.17918330696605497`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Periodic raw internal-val MAE:
+  - E80/E100/E120/E140/E144: `0.19334282245259954` /
+    `0.1884155966258039` / `0.18571690462079166` /
+    `0.18129468143868238` / `0.17708619417784993`
+  - E160/E180/E200: `0.17828476382328198` /
+    `0.17971545732022262` / `0.17918330696605497`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9788793103448277`
+- `prediction_bias`: `0.003978378139436245`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.032`
+- Train raw MAE: `0.037863372940062284`
+- Train calibrated MAE: `0.0262417160114543`
+- Internal-val raw MAE: `0.17708816153061221`
+- Internal-val calibrated MAE: `0.17329601816249798`
+- Binned-residual calibrated train MAE: `0.025960016451926603`
+- Binned-residual calibrated internal-val MAE: `0.17324375607314652`
+- Raw negative fraction on internal val: `0.3343149958770173`
+- Calibrated zero fraction on internal val: `0.4285546000706797`
+- Target zero fraction on internal val: `0.4439863352573919`
+
+Conclusion: discrete depth encoding is a real generic structural improvement
+over the default long-schedule baseline and it nearly matches the other
+non-dropout structural/numeric variants, but it still does not beat the
+`dropout=0.05` run (`0.17709` vs `0.17378`). The high raw negative fraction
+also explains why train-only calibration helps this recipe more than it helps
+dropout-only. Treat this as an effective but insufficient bias improvement.
+
 ## Numeric Path FiLM 200-Epoch Schedule
 
 Run directory:
