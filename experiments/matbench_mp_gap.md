@@ -2176,6 +2176,63 @@ regularization change, not a target-specific head or post-hoc test adjustment.
 The remaining 200-epoch combinations should still be completed to isolate
 whether discrete depth bias helps with or without lower dropout.
 
+## Dropout 0.05 Plus Discrete Depth 200-Epoch Schedule
+
+Run directory:
+
+`checkpoints/20260612_053635_matbench_mp_gap_comp_cewald_cnn_dropcoords`
+
+Training command:
+
+```bash
+env PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 pixi run python train.py \
+  --dataset matbench_mp_gap --model-size large \
+  --add-composition --add-comp-ewald --add-comp-nn --drop-coords \
+  --matbench-split official --matbench-fold 0 --matbench-val-ratio 0.1 \
+  --max-epochs 200 --patience 200 --max-cpu-workers 4 \
+  --checkpoint-interval 20 --log-every 0 --sample-every 0 --eval-train-every 0 \
+  --structural-bias-lr-mult 20 --loss-compression-scale 5.0 \
+  --dropout 0.05 --bias-discrete-depths
+```
+
+Training result:
+
+- Best raw internal-val MAE: `0.1762287588429963`
+- Best raw epoch: `193`
+- Final epoch raw internal-val MAE: `0.17631094051080393`
+- Best checkpoint: `matbench_mp_gap_train_best_val.pth`
+- Periodic raw internal-val MAE:
+  - E20/E40/E60/E80/E100: `0.25106868631983886` /
+    `0.21074980324170964` / `0.1963468756614039` /
+    `0.19434343447239208` / `0.1847120139720071`
+  - E120/E140/E160/E180/E193/E200: `0.18126571441351164` /
+    `0.17878884629853548` / `0.17642901309408604` /
+    `0.1768085989436183` / `0.1762287588429963` /
+    `0.17631094051080393`
+
+Train-only calibration result:
+
+- `prediction_scale`: `0.9868103448275862`
+- `prediction_bias`: `0.001520042304142282`
+- `prediction_min_value`: `0.0`
+- `prediction_zero_threshold`: `0.015261638006934114`
+- Train raw MAE: `0.02071125291049226`
+- Train calibrated MAE: `0.012383631179336786`
+- Internal-val raw MAE: `0.17623307630194587`
+- Internal-val calibrated MAE: `0.1748428762516377`
+- Binned-residual calibrated train MAE: `0.012208623642813091`
+- Binned-residual calibrated internal-val MAE: `0.1747861499854179`
+- Raw negative fraction on internal val: `0.28154081752856636`
+- Calibrated zero fraction on internal val: `0.4085286841795264`
+- Target zero fraction on internal val: `0.4439863352573919`
+
+Conclusion: this does not beat dropout-only raw MAE (`0.17623` vs `0.17378`),
+but it is stronger than the 200-epoch `dropout=0.05 + numeric_path_film`
+recipe (`0.17755`) and the three-way `dropout + discrete + FiLM` recipe
+(`0.17965`). Discrete depth bias is therefore a useful generic structural
+signal, but under this long schedule it does not compose with lower dropout
+well enough to replace the simpler dropout-only model.
+
 ## Numeric Path FiLM 200-Epoch Schedule
 
 Run directory:
